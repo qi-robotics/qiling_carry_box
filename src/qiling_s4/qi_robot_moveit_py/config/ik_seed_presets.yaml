@@ -1,0 +1,78 @@
+# Preferred IK seed presets for pick_ik.
+#
+# Joint order used by list-style positions:
+#   1  left_shoulder_pitch_joint
+#   2  left_shoulder_roll_joint
+#   3  left_shoulder_yaw_joint
+#   4  left_elbow_joint
+#   5  left_wrist_roll_joint
+#   6  left_wrist_pitch_joint
+#   7  left_wrist_yaw_joint
+#   8  right_shoulder_pitch_joint
+#   9  right_shoulder_roll_joint
+#   10 right_shoulder_yaw_joint
+#   11 right_elbow_joint
+#   12 right_wrist_roll_joint
+#   13 right_wrist_pitch_joint
+#   14 right_wrist_yaw_joint
+#
+# mode:
+#   current   - ignore positions and use current joint state as IK seed.
+#   preferred - use this preset directly as IK seed.
+#   blend     - blend current joint state toward this preset using blend.
+#
+# Fill positions with 14 radian values. Empty lists are ignored safely.
+
+joint_order:
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - left_wrist_roll_joint
+  - left_wrist_pitch_joint
+  - left_wrist_yaw_joint
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+  - right_wrist_roll_joint
+  - right_wrist_pitch_joint
+  - right_wrist_yaw_joint
+
+presets:
+  default:
+    description: Keep the original behavior unless another preset is selected.
+    mode: current
+    blend: 0.1
+    positions: [0.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+  grasp:
+    description: Fill this with a natural two-arm reach/grasp posture.
+    mode: blend
+    blend: 0.20
+    positions: [0.0, 0.31, 0.2, -1.7, 0.0, 0.0, 0.0, 0.0, -0.31, 0.2, -1.7, 0.0, 0.0, 0.0]
+
+  lift:
+    description: Fill this with a compact lift posture after attachment.
+    mode: blend
+    blend: 0.20
+    positions: [0.0, 0.31, 0.2, -1.7, 0.0, 0.0, 0.0, 0.0, -0.31, 0.2, -1.7, 0.0, 0.0, 0.0]
+
+  carry:
+    description: Fill this with elbows-down, close-to-body carrying posture.
+    mode: blend
+    blend: 0.20
+    positions: [0.0, 0.31, 0.2, -1.7, 0.0, 0.0, 0.0, 0.0, -0.31, 0.2, -1.7, 0.0, 0.0, 0.0]
+
+  place:
+    description: Fill this with a stable lowering/release posture.
+    mode: blend
+    blend: 0.20
+    positions: [0.0, 0.31, 0.2, -1.7, 0.0, 0.0, 0.0, 0.0, -0.31, 0.2, -1.7, 0.0, 0.0, 0.0]
+
+  home:
+    description: Optional comfortable return posture.
+    mode: blend
+    blend: 0.1
+    positions: [0.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+

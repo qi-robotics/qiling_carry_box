@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="qi_robot_dual_arm_full_fixed">
+    <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+
+    <!-- Import qi_robot_dual_arm_full_fixed urdf file -->
+    <xacro:include filename="$(find qi_robot_description)/urdf/s4_dual_arm.urdf" />
+
+    <!-- Import control_xacro -->
+    <xacro:include filename="qi_robot_dual_arm_full_fixed.ros2_control.xacro" />
+
+
+    <xacro:qi_robot_dual_arm_full_fixed_ros2_control name="FakeSystem" initial_positions_file="$(arg initial_positions_file)"/>
+
+</robot>

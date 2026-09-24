@@ -1,0 +1,158 @@
+
+
+# 机器人抬起过渡点
+# [ 1.186, 0.164, -0.246, -1.629, -1.495, 0.015, 0.209,     1.186, -0.164, -0.246, -1.629, 1.495, 0.015, 0.209, ]
+
+ros2 topic pub --once /both_arms/joint_goal sensor_msgs/msg/JointState "
+name:
+- left_shoulder_pitch_joint
+- left_shoulder_roll_joint
+- left_shoulder_yaw_joint
+- left_elbow_joint
+- left_wrist_roll_joint
+- left_wrist_pitch_joint
+- left_wrist_yaw_joint
+- right_shoulder_pitch_joint
+- right_shoulder_roll_joint
+- right_shoulder_yaw_joint
+- right_elbow_joint
+- right_wrist_roll_joint
+- right_wrist_pitch_joint
+- right_wrist_yaw_joint
+position: [ 1.186, 0.164, -0.246, -1.629, -1.495, 0.015, 0.209,     1.186, -0.164, -0.246, -1.629, 1.495, 0.015, 0.209, ]
+"
+
+# 机器人等待指令点位 / MoveIt home
+# [ 0.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0,    -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+
+ros2 topic pub --once /both_arms/joint_goal sensor_msgs/msg/JointState "
+name:
+- left_shoulder_pitch_joint
+- left_shoulder_roll_joint
+- left_shoulder_yaw_joint
+- left_elbow_joint
+- left_wrist_roll_joint
+- left_wrist_pitch_joint
+- left_wrist_yaw_joint
+- right_shoulder_pitch_joint
+- right_shoulder_roll_joint
+- right_shoulder_yaw_joint
+- right_elbow_joint
+- right_wrist_roll_joint
+- right_wrist_pitch_joint
+- right_wrist_yaw_joint
+position: [ 0.0, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0,    -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+"
+
+#right: 
+ros2 topic pub --once /right_arm/pose_goal geometry_msgs/msg/PoseStamped "
+header:
+  frame_id: base_link
+pose:
+  position:
+    x: 0.121
+    y: -0.314
+    z: 0.126
+  orientation:
+    x: 0.466
+    y: 0.700
+    z: 0.301
+    w: 0.448
+"
+
+#left:
+  position: {x: 0.5434, y: 0.1747, z: 0.1478}
+  orientation: {x: -0.5000, y: 0.5000, z: -0.5000, w: 0.5000}
+
+ros2 topic pub --once /left_arm/pose_goal geometry_msgs/msg/PoseStamped "
+header:
+  frame_id: base_link
+pose:
+  position:
+    x: 0.5434
+    y: 0.1747
+    z: 0.1478
+  orientation:
+    x: -0.5000
+    y: 0.5000
+    z: -0.5000
+    w: 0.5000
+"
+
+
+# 抱的姿态
+ros2 topic pub --once /right_arm/pose_goal geometry_msgs/msg/PoseStamped "
+header:
+  frame_id: base_link
+pose:
+  position:
+    x: 0.324
+    y: -0.201
+    z: 0.0
+  orientation:
+    x: 0.5
+    y: 0.5
+    z: 0.5
+    w: 0.5
+"
+
+ros2 topic pub --once /left_arm/pose_goal geometry_msgs/msg/PoseStamped "
+header:
+  frame_id: base_link
+pose:
+  position:
+    x: 0.324
+    y: 0.201
+    z: 0.0
+  orientation:
+    x: 0.5
+    y: -0.5
+    z: 0.5
+    w: -0.5
+"
+
+# 提的姿态
+ros2 topic pub --once /right_arm/pose_goal geometry_msgs/msg/PoseStamped "
+header:
+  frame_id: base_link
+pose:
+  position:
+    x: 0.354
+    y: -0.151
+    z: 0.004
+  orientation:
+    x: 0.717
+    y: 0.695
+    z: -0.015
+    w: 0.055
+"
+
+# 同时发送左右臂的目标位姿：
+ros2 topic pub --once /both_arms/left_pose_goal geometry_msgs/msg/PoseStamped "
+header:
+  frame_id: base_link
+pose:
+  position:
+    x: 0.324
+    y: 0.201
+    z: 0.00
+  orientation:
+    x: 0.5
+    y: -0.5
+    z: 0.5
+    w: -0.5
+  "
+ros2 topic pub --once /both_arms/right_pose_goal geometry_msgs/msg/PoseStamped "
+header:
+  frame_id: base_link
+pose:
+  position:
+    x: 0.324
+    y: -0.201
+    z: 0.0
+  orientation:
+    x: 0.5
+    y: 0.5
+    z: 0.5
+    w: 0.5
+"

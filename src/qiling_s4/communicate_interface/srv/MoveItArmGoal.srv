@@ -1,0 +1,64 @@
+int8 TARGET_LEFT = 1
+int8 TARGET_RIGHT = 2
+int8 TARGET_BOTH = 3
+
+int8 COMMAND_POSE = 1
+int8 COMMAND_JOINT = 2
+int8 COMMAND_OBJECT = 3
+int8 COMMAND_OBJECT_ROUNDTRIP = 4
+int8 COMMAND_OBJECT_PREPARE_PLACE = 5
+int8 COMMAND_OBJECT_EXECUTE_PLACE = 6
+int8 COMMAND_JOINT_PREPARE_LIFT_PLACE = 7
+int8 COMMAND_OBJECT_EXECUTE_PUSH = 8
+
+# Select which arm(s) to command.
+int8 target
+
+# Select whether this request uses pose targets or joint targets.
+int8 command_type
+
+# Optional reference frame override for pose targets. If empty, each pose header
+# is used, then the goal commander's reference_frame parameter is used.
+string frame_id
+
+# Internal planning cache controls.  Normal callers can leave these defaults:
+# plan_only=false and use_cached_plan=false.
+# When plan_only=true, the commander solves the complete trajectory and stores
+# it under cache_key without sending commands to the controller.
+# When use_cached_plan=true, the commander executes the stored trajectory.
+bool plan_only
+bool use_cached_plan
+string cache_key
+
+# Per-request Cartesian IK continuity limit (rad). <= 0 uses the node default.
+float64 max_joint_step
+
+# Pose targets are interpreted as tool-frame targets.
+# For TARGET_LEFT, fill left_pose.
+# For TARGET_RIGHT, fill right_pose.
+# For TARGET_BOTH, fill both left_pose and right_pose.
+geometry_msgs/Pose left_pose
+geometry_msgs/Pose right_pose
+
+# Joint targets use the same rules as the topic API:
+# - TARGET_LEFT/RIGHT: 7 positions, names optional.
+# - TARGET_BOTH: 14 positions, names optional.
+sensor_msgs/JointState joint_goal
+
+# Object targets are interpreted as a carried object centroid target.
+# For TARGET_BOTH + COMMAND_OBJECT, fill object_pose. The goal commander
+# derives left/right tool targets from configurable object->tool offsets.
+# For TARGET_BOTH + COMMAND_OBJECT_ROUNDTRIP, object_pose is the final place
+# centroid; the commander estimates the current carried centroid, lifts it by
+# object_roundtrip_lift_z, then returns to object_pose as one joint trajectory.
+# For TARGET_BOTH + COMMAND_OBJECT_PREPARE_PLACE, object_pose is the final place
+# centroid; the commander pre-solves lift and place joint waypoints, executes
+# only the lift part now, and caches the place trajectory.
+# For TARGET_BOTH + COMMAND_OBJECT_EXECUTE_PLACE, the commander executes the
+# cached place trajectory from the held lift-top state. object_pose is ignored.
+# For TARGET_BOTH + COMMAND_OBJECT_EXECUTE_PUSH, the commander executes the
+# cached post-place +X push trajectory. object_pose is ignored.
+geometry_msgs/Pose object_pose
+---
+bool accepted
+string message

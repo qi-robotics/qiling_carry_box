@@ -1,0 +1,191 @@
+S4 双臂控制启动速查
+
+一、真机启动
+
+  cd /home/coral/project/qiling_carry_box
+  source install/setup.bash
+  ./src/qiling_s4/scripts/run/start_robot_stack.sh
+
+真机链路：
+
+  lowstate -> lowstate_joint_states_bridge -> /joint_states
+  /moveit_arm_goal 或 /vision_grasp/grasp_command -> MoveIt
+    -> lowcmd_arms（ROS；DDS rt/lowcmd_arms）
+  机载：rt/lowcmd 腿策略 + rt/lowcmd_arms 上肢覆盖融合
+
+说明：
+  - 上肢专用话题，不要再往 lowcmd 用 mode_ctrl=5 伪装遥操
+  - motors 必须发全身长度（真机 body_dof=26）；腿段可占位
+  - 发布频率默认 50 Hz（SDK 要求 ≥50）
+  - mode_ctrl 在 lowcmd_arms 上不参与判源，默认 0
+
+
+二、外部 MuJoCo 仿真启动
+
+仿真器、场景、导航、视觉服务由其他模块启动。本工作区只启动双臂控制，读取外部 /joint_states，输出 lowcmd：
+
+  cd /home/zfy/qiling_s4
+  source install/setup.bash
+  ./src/qiling_s4/scripts/run/start_external_sim_arm_stack.sh
+
+外部仿真侧需要提供：
+
+  /joint_states
+    类型：sensor_msgs/msg/JointState
+    要求：至少包含双臂 14 个关节名，header.stamp 必须为当前时间，不能一直为 0
+
+  detect
+    类型：upper_limb_interface/srv/DetectAprilTag
+    要求：返回 base_link 坐标系下的 box_pose
+
+外部仿真侧需要订阅：
+
+  lowcmd
+    类型：qi/msg/LowCmd
+    说明：与真机控制命令保持一致，由仿真侧适配到 MuJoCo 执行器
+
+
+三、无 MuJoCo 的 RViz 可视化启动
+
+如果还没有接入 MuJoCo，但需要在 RViz 中看机器人跟随指令运动，打开 publish_fake_joint_states：
+
+  cd /home/zfy/qiling_s4
+  source install/setup.bash
+  ./src/qiling_s4/scripts/run/start_external_sim_arm_stack.sh publish_fake_joint_states:=true
+
+该模式会启动 lowcmd_joint_states_echo：
+
+  默认 home 点 -> /joint_states
+  lowcmd -> lowcmd_joint_states_echo -> /joint_states
+
+注意：这只是 RViz 可视化回显，不模拟 MuJoCo 动力学。接入外部 MuJoCo 后保持 publish_fake_joint_states:=false。
+
+
+四、上抬/放置平滑默认配置
+
+平滑参数已经写入默认配置，启动命令不需要带这些参数。真机和仿真都经过同一个 moveit_goal_commander，平滑逻辑一致。
+预抓取到抓取点默认使用 cartesian_direct，不再走 legacy MoveIt 执行时间，因此速度会受 direct_* 参数统一限制。
+上抬/下降会先对多 IK 点关节轨迹做 smoothing spline 风格平滑，再做 jerk-limited 时间参数化。
+spline 平滑会保留首尾点和固定间隔锚点的原 IK 解，避免牺牲关键末端位置精度。
+
+当前默认值：
+
+  object_cartesian_waypoint_count:=10
+  both_pose_goal_mode:=cartesian_direct
+  direct_smoothing_method:=spline
+  direct_spline_anchor_stride:=3
+  direct_spline_smoothing_alpha:=0.35
+  direct_spline_max_joint_deviation:=0.08
+  direct_time_parameterization:=jerk_limited
+  direct_max_velocity:=0.45
+  direct_max_acceleration:=0.80
+  direct_max_jerk:=2.50
+  direct_min_segment_duration:=0.12
+  direct_max_duration_scale:=1.50
+
+修改默认配置的位置：
+
+  真机入口：
+    /home/zfy/qiling_s4/src/qiling_s4/qi_robot_moveit_config/launch/bringup/robot_stack.launch.py
+
+  外部仿真入口：
+    /home/zfy/qiling_s4/src/qiling_s4/qi_robot_moveit_config/launch/bringup/external_sim_arm_stack.launch.py
+
+  goal_commander 子 launch：
+    /home/zfy/qiling_s4/src/qiling_s4/qi_robot_moveit_py/launch/goal_commander.launch.py
+
+  节点内部兜底默认值：
+    /home/zfy/qiling_s4/src/qiling_s4/qi_robot_moveit_py/qi_robot_moveit_py/moveit_goal_commander.py
+
+如果动作太慢，优先适当增大 direct_max_velocity / direct_max_acceleration / direct_max_jerk，或者把 direct_max_duration_scale 调到 2.0 以内观察。
+如果速度曲线仍有尖峰，先把 object_cartesian_waypoint_count 调到 8 再试。
+如果末端中间路径偏差偏大，把 direct_spline_anchor_stride 调小，或把 direct_spline_max_joint_deviation 调小。
+如果关节速度仍然波动，把 direct_spline_smoothing_alpha 适当增大；如果轨迹贴原 IK 点不够，把它适当减小。
+
+观察速度曲线：
+
+  rqt_plot /lowcmd/motors[15]/dq /lowcmd/motors[22]/dq
+
+
+
+五、箱体和末端姿态
+
+本项目不使用箱子的姿态，箱体 object pose 固定为单位四元数：
+
+  object_pose_orientation_mode:=identity
+  object_path_start_mode:=requested
+  object_orientation_xyzw:=0.0,0.0,0.0,1.0
+
+左右末端姿态由基础姿态加 RPY 偏移在代码里计算：
+
+  left_orientation_xyzw:=-0.5,0.5,-0.5,0.5
+  right_orientation_xyzw:=0.5,0.5,0.5,0.5
+  left_orientation_rpy_offset:=-0.3,0.0,-0.15
+  right_orientation_rpy_offset:=0.3,0.0,0.15
+  object_to_tool_orientation_mode:=from_tool_orientation
+
+object_to_left_tool_xyz / object_to_right_tool_xyz 只表示箱体中心到末端的位置偏移。
+默认值和抓取点偏移保持一致：
+
+  object_to_left_tool_xyz:=0.01,0.1840,0.08
+  object_to_right_tool_xyz:=0.01,-0.1840,0.08
+
+
+六、抓取/放置命令
+
+触发视觉检测并抓取：
+
+  ros2 topic pub --once /vision_grasp/grasp_command std_msgs/msg/String "{data: grasp}"
+
+手动给箱子位置抓取：
+
+  ros2 topic pub --once /vision_grasp/grasp_command std_msgs/msg/String "{data: 'grasp 0.48 0.00 0.09'}"
+
+使用调试得到的双臂抓取关节角（左臂 7 个在前，右臂 7 个在后）：
+
+  ros2 topic pub --once /vision_grasp/grasp_command std_msgs/msg/String \
+    "{data: 'grasp_joints -0.60 0.41 -0.34 -0.62 -0.24 -0.33 0.19 -0.60 -0.41 -0.34 -0.62 0.24 -0.33 0.19'}"
+
+grasp_joints 不需要箱子坐标。节点先由这 14 个关节角计算左右末端位姿和中点，
+保持末端姿态及相对偏移，预规划完整的竖直上抬/下降路径；成功后才依次执行
+预抓取过渡点、预抓取点、抓取关节角和上抬。place 指令执行缓存下降并回 home。
+
+抓取后会在上抬最高点保持，等待放置：
+
+  ros2 topic pub --once /vision_grasp/place_command std_msgs/msg/String "{data: place}"
+
+
+七、常用检查
+
+  ros2 topic echo /joint_states --once
+  ros2 topic hz /joint_states
+  ros2 topic info -v lowcmd
+  ros2 topic echo /moveit_arm_target --once
+
+
+ros2 service call /moveit_arm_goal communicate_interface/srv/MoveItArmGoal "
+target: 3
+command_type: 2
+joint_goal:
+  name:
+  - left_shoulder_pitch_joint
+  - left_shoulder_roll_joint
+  - left_shoulder_yaw_joint
+  - left_elbow_joint
+  - left_wrist_roll_joint
+  - left_wrist_pitch_joint
+  - left_wrist_yaw_joint
+  - right_shoulder_pitch_joint
+  - right_shoulder_roll_joint
+  - right_shoulder_yaw_joint
+  - right_elbow_joint
+  - right_wrist_roll_joint
+  - right_wrist_pitch_joint
+  - right_wrist_yaw_joint
+  position: [-0.60, 0.41, -0.34, -0.62, -0.24, -0.33, 0.19, -0.60, -0.41, -0.34, -0.62, 0.24, -0.33, 0.19,]
+"
+
+# 预抓取点测试
+
+-0.60, 0.41, -0.34, -0.62, -0.24, -0.33, 0.19,
+-0.60, -0.41, -0.34, -0.62, 0.24, -0.33, 0.19,

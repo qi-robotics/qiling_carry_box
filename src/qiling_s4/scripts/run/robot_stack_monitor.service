@@ -1,0 +1,52 @@
+[Unit]
+Description=Robot Stack Monitor - starts robot_stack after qi_deploy is ready
+Documentation=man:systemd.service(5)
+
+# 这里只负责启动顺序，不通过 Wants/Requires 主动拉起 qi_deploy.service。
+# 即使 qi_deploy 尚未启动，monitor 脚本也会自行循环等待。
+After=network.target network-online.target qi_deploy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=coral
+Group=coral
+
+WorkingDirectory=/home/coral/project/qiling_carry_box
+
+Environment="RMW_IMPLEMENTATION=rmw_cyclonedds_cpp"
+# 与机载 SDK config/dds/dds_config.yaml domain_id 保持一致（当前为 21）
+Environment="ROS_DOMAIN_ID=21"
+# 与 qi_deploy 真机网口一致；若文件不存在，monitor 脚本会按 SDK/交付包自动回退
+Environment="CYCLONEDDS_URI=file:///home/coral/qi_deploy_igh_release/config/dds/cyclonedds_enp8s0.xml"
+
+# 可选参数
+Environment="DEPLOY_SETTLE_SECONDS=60"
+Environment="MONITOR_INTERVAL_SECONDS=10"
+Environment="STOP_TIMEOUT_SECONDS=10"
+
+# systemd 自动创建：
+# /run/robot_stack_monitor
+#
+# 并将目录所有者设置为 coral:coral。
+RuntimeDirectory=robot_stack_monitor
+RuntimeDirectoryMode=0755
+
+ExecStart=/home/coral/project/qiling_carry_box/src/qiling_s4/scripts/run/monitor_robot_stack.sh
+
+# 停止服务时，先只向主监控脚本发送 SIGTERM。
+# 监控脚本负责清理 robot_stack 进程组。
+# 超过 TimeoutStopSec 后，systemd 再 SIGKILL 整个服务 cgroup 兜底。
+KillMode=mixed
+KillSignal=SIGTERM
+SendSIGKILL=yes
+TimeoutStopSec=25
+
+# robot_stack 或监控脚本异常退出后不自动重启。
+Restart=no
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
