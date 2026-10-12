@@ -118,6 +118,9 @@ def generate_launch_description():
             DeclareLaunchArgument("cached_trajectory_start_blend_enabled", default_value="false"),
             DeclareLaunchArgument("carry_x_offset", default_value="0.0"),
             DeclareLaunchArgument("post_place_push_x", default_value="0.0"),
+            DeclareLaunchArgument("post_place_retract_x", default_value="0.0"),
+            DeclareLaunchArgument("post_place_spread_y", default_value="0.0"),
+            DeclareLaunchArgument("post_place_lower_z", default_value="0.0"),
             DeclareLaunchArgument("allowed_planning_time", default_value="5.0"),
             DeclareLaunchArgument("num_planning_attempts", default_value="5"),
             DeclareLaunchArgument("max_velocity_scaling_factor", default_value="0.4"),
@@ -285,6 +288,15 @@ def generate_launch_description():
                         ),
                         "post_place_push_x": ParameterValue(
                             LaunchConfiguration("post_place_push_x"), value_type=float
+                        ),
+                        "post_place_retract_x": ParameterValue(
+                            LaunchConfiguration("post_place_retract_x"), value_type=float
+                        ),
+                        "post_place_spread_y": ParameterValue(
+                            LaunchConfiguration("post_place_spread_y"), value_type=float
+                        ),
+                        "post_place_lower_z": ParameterValue(
+                            LaunchConfiguration("post_place_lower_z"), value_type=float
                         ),
                         "allowed_planning_time": ParameterValue(
                             LaunchConfiguration("allowed_planning_time"), value_type=float

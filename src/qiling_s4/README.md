@@ -216,38 +216,44 @@ carry_x_offset = 0.0
 ./start_robot_stack.sh carry_x_offset:=0.05
 ```
 
-### 放置后前推
+### 放置后前推与双臂回撤下放
 
-真机 `robot_stack.launch.py` 和外部仿真 `external_sim_arm_stack.launch.py` 默认启用：
+真机 `robot_stack.launch.py` 默认启用：
 
 ```text
 post_place_push_x = 0.10
+post_place_retract_x = 0.03
+post_place_spread_y = 0.02
+post_place_lower_z = 0.03
 ```
 
-该值表示箱体下降到放置点后，双手保持闭合，沿 `base_link` 的 x 正方向继续推动
-0.10 m。前推完成后才张开灵巧手，随后依次经过 `home_transition_joint_positions`
-中的过渡点并回到 `home_joint_positions`。设为 `0.0` 可关闭该阶段。
+`post_place_push_x` 表示箱体下降到放置点后，双手保持闭合，沿 `base_link` 的 x 正方向前推
+0.10 m。前推到规划终点后，双臂从各自的前推终点同步沿直线回撤下放：左臂
+`(x,y,z)=(-0.03,+0.02,-0.03)` m，右臂 `(-0.03,-0.02,-0.03)` m，末端姿态保持不变。
+这三个正数参数分别控制 x 回撤、左右 y 外展和 z 下放的距离；全部为 `0.0` 时跳过回撤段。
+回撤段执行成功后才张开灵巧手，随后经过 home 过渡点并回到 home。
+整段在抓取前基于规划的前推终点预规划，不会在前推完成后重新读取实际末端位置。
 
-抓取动作开始前会一次性完成抓取、上抬、下降和前推 waypoint IK。任一点 IK 失败、
+抓取动作开始前会一次性完成抓取、上抬、下降、前推和回撤下放 waypoint IK。任一点 IK 失败、
 关节跳变超过 `direct_ik_max_joint_step`，整段都不会执行，并通过
-`/vision_grasp/status` 与 `/both_arms/result` 发布失败原因。下降和前推执行前还会检查
-实际关节是否接近对应缓存起点，避免从错误状态突然续接轨迹。
-前推阶段必须收到控制器明确成功结果；失败或结果超时会保持灵巧手闭合并停止，不会继续
-张手和回 home。
+`/vision_grasp/status` 与 `/both_arms/result` 发布失败原因。执行时会检查当前关节
+是否接近缓存轨迹起点；若下降与后续动作分段执行，还会检查二者衔接起点。
+前推与回撤下放阶段必须收到控制器明确成功结果；失败或结果超时会保持灵巧手闭合并停止，
+不会继续张手和回 home。
 
 真机和外部仿真的缓存衔接与前推终点使用相同的独立关节容差：
 
 ```text
 cached_place_start_tolerance = 0.10 rad
-cached_push_start_tolerance = 0.05 rad
-cached_push_goal_tolerance = 0.05 rad
+cached_push_start_tolerance = 0.10 rad
+cached_push_goal_tolerance = 0.10 rad
 cached_trajectory_start_blend_enabled = true
 ```
 
 下降和前推执行时都会由桥接层插入当前关节状态，并使用
 `trajectory_start_hold_time`/`trajectory_start_blend_time` 平滑衔接缓存起点，不再直接跳到
-缓存首点。前推的 `0.05 rad` 是每个关节的到位容差，不是箱体 x 方向的笛卡尔距离
-容差；需要毫米级确认时，应增加执行后 FK 或箱体位姿反馈。
+缓存首点。`cached_push_goal_tolerance` 是每个关节的到位容差，不是箱体在 x/z 方向
+的笛卡尔距离容差；需要确认实际下放距离时，应增加执行后 FK 或箱体位姿反馈。
 
 `place`、`release`、`down`、`put_down` 和手柄放置只在抓取与缓存上抬成功、节点进入
 等待放置状态后才会被接受。更早到达的放置指令会立即忽略，不会排队到抓取结束后执行。
@@ -256,6 +262,7 @@ cached_trajectory_start_blend_enabled = true
 
 ```bash
 ./start_robot_stack.sh post_place_push_x:=0.05
+./start_robot_stack.sh post_place_retract_x:=0.02 post_place_spread_y:=0.01 post_place_lower_z:=0.02
 ./start_external_sim_arm_stack.sh post_place_push_x:=0.05
 ```
 

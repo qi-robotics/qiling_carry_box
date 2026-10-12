@@ -87,6 +87,9 @@ class VisionGraspSequence(Node):
         self.declare_parameter("lift_z", 0.03)
         self.declare_parameter("carry_x_offset", 0.0)
         self.declare_parameter("post_place_push_x", 0.0)
+        self.declare_parameter("post_place_retract_x", 0.0)
+        self.declare_parameter("post_place_spread_y", 0.0)
+        self.declare_parameter("post_place_lower_z", 0.0)
         self.declare_parameter("attach_wait_sec", 3.0)
         self.declare_parameter("service_timeout_sec", 30.0)
         self.declare_parameter("motion_timeout_sec", 45.0)
@@ -200,6 +203,16 @@ class VisionGraspSequence(Node):
         self.lift_z = float(self.get_parameter("lift_z").value)
         self.carry_x_offset = float(self.get_parameter("carry_x_offset").value)
         self.post_place_push_x = float(self.get_parameter("post_place_push_x").value)
+        self.post_place_retract_x = float(self.get_parameter("post_place_retract_x").value)
+        self.post_place_spread_y = float(self.get_parameter("post_place_spread_y").value)
+        self.post_place_lower_z = float(self.get_parameter("post_place_lower_z").value)
+        for name in ("post_place_retract_x", "post_place_spread_y", "post_place_lower_z"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} 必须是非负的有限米数；0 表示该方向不移动。")
+        self.post_place_tail_enabled = max(
+            self.post_place_retract_x, self.post_place_spread_y, self.post_place_lower_z
+        ) > 1.0e-6
         self.attach_wait_sec = float(self.get_parameter("attach_wait_sec").value)
         self.service_timeout_sec = float(self.get_parameter("service_timeout_sec").value)
         self.motion_timeout_sec = float(self.get_parameter("motion_timeout_sec").value)
@@ -465,17 +478,17 @@ class VisionGraspSequence(Node):
         ):
             return False
         self._publish_status("grasp", "ik_preplan", "ok", "抓取IK预规划完成")
-        self._set_ik_seed_preset(self.lift_ik_seed_preset, "上抬/下降/前推预规划")
-        self._publish_status("grasp", "ik_preplan", "info", "开始上抬/下降/放置后前推IK预规划")
+        self._set_ik_seed_preset(self.lift_ik_seed_preset, "上抬/下降/前推/回撤下放预规划")
+        self._publish_status("grasp", "ik_preplan", "info", "开始上抬/下降/前推/回撤下放IK预规划")
         if not self._send_both_arm_object_prepare_place_goal(
             object_grasp,
-            "双臂上抬/下降/放置后前推预规划缓存",
+            "双臂上抬/下降/前推/回撤下放预规划缓存",
             allow_motion_timeout=False,
             plan_only=True,
             cache_key="lift_place",
         ):
             return False
-        self._publish_status("grasp", "ik_preplan", "ok", "上抬/下降/放置后前推IK预规划完成")
+        self._publish_status("grasp", "ik_preplan", "ok", "上抬/下降/前推/回撤下放IK预规划完成")
 
         if self.use_pregrasp_joint_goal:
             if self.precheck_grasp_ik_before_pregrasp and not self._precheck_both_grasp_ik(left_grasp, right_grasp):
@@ -600,11 +613,11 @@ class VisionGraspSequence(Node):
         )
         if not self._send_joint_prepare_lift_place_goal(
             positions,
-            "关节抓取上抬/下降/放置后前推预规划缓存",
+            "关节抓取上抬/下降/前推/回撤下放预规划缓存",
             cache_key="lift_place",
         ):
             return False
-        self._publish_status("grasp", "ik_preplan", "ok", "关节角上抬/下降/放置后前推预规划完成")
+        self._publish_status("grasp", "ik_preplan", "ok", "关节角上抬/下降/前推/回撤下放预规划完成")
 
         if self.pregrasp_transition_joint_positions and not self.combined_task_trajectories:
             self.get_logger().info("开始发送关节抓取预抓取过渡点。")
@@ -1085,7 +1098,8 @@ class VisionGraspSequence(Node):
         request.command_type = MoveItArmGoal.Request.COMMAND_OBJECT_EXECUTE_PLACE
         request.frame_id = self.frame_id
         request.combine_place_push = bool(
-            self.combined_task_trajectories and abs(self.post_place_push_x) > 1e-6
+            self.combined_task_trajectories
+            and (abs(self.post_place_push_x) > 1e-6 or self.post_place_tail_enabled)
         )
 
         self.get_logger().info(f"{label}即将调用 {self.arm_goal_service_name}，执行缓存下降轨迹。")
@@ -1123,8 +1137,11 @@ class VisionGraspSequence(Node):
         request.frame_id = self.frame_id
 
         self.get_logger().info(
-            f"{label}即将调用 {self.arm_goal_service_name}，执行缓存放置后前推轨迹，"
-            f"base_link x 偏移={self.post_place_push_x:+.3f} m。"
+            f"{label}即将调用 {self.arm_goal_service_name}，执行缓存放置后续轨迹，"
+            f"base_link x 前推={self.post_place_push_x:+.3f} m，"
+            f"回撤 x=-{self.post_place_retract_x:.3f} m，"
+            f"双臂 y 外展={self.post_place_spread_y:.3f} m，"
+            f"下放 z=-{self.post_place_lower_z:.3f} m。"
         )
 
         self._last_result = None
@@ -1148,11 +1165,11 @@ class VisionGraspSequence(Node):
             self._publish_status("place", "push", "fail", f"{label}目标未被接收：{response.message}")
             return False
 
-        self.get_logger().info(f"{label}目标已接收，等待 {self.result_topic} 前推执行结果。")
+        self.get_logger().info(f"{label}目标已接收，等待 {self.result_topic} 执行结果。")
         return self._wait_for_motion_result(
             label,
             allow_timeout_success=allow_motion_timeout,
-            expected_result_keywords=("缓存放置后前推",),
+            expected_result_keywords=(label.replace("双臂", "", 1),),
         )
 
     def _send_both_arm_joint_goal(
@@ -1250,11 +1267,13 @@ class VisionGraspSequence(Node):
         object_grasp: Optional[Pose] = None,
     ) -> bool:
         del left_lift, right_lift, left_grasp, right_grasp, object_grasp
-        place_motion = (
-            "下降+闭手前推"
-            if self.combined_task_trajectories and abs(self.post_place_push_x) > 1e-6
-            else "下降"
-        )
+        tail_parts = []
+        if abs(self.post_place_push_x) > 1e-6:
+            tail_parts.append("前推")
+        if self.post_place_tail_enabled:
+            tail_parts.append("回撤下放")
+        tail_motion = "+".join(tail_parts)
+        place_motion = "下降+" + tail_motion if self.combined_task_trajectories and tail_motion else "下降"
         self.get_logger().info(f"收到放置指令，执行缓存的{place_motion}轨迹。")
         self._publish_status("place", "motion", "info", f"开始执行缓存{place_motion}轨迹")
         self._set_ik_seed_preset(self.place_ik_seed_preset, "缓存放置下降")
@@ -1267,29 +1286,34 @@ class VisionGraspSequence(Node):
             return False
         self._publish_status("place", "motion", "ok", f"{place_motion}轨迹执行完成")
 
-        if abs(self.post_place_push_x) > 1.0e-6 and not self.combined_task_trajectories:
+        if tail_motion and not self.combined_task_trajectories:
             self.get_logger().info(
-                f"下降完成，灵巧手保持闭合，开始沿 base_link x 方向前推 "
-                f"{self.post_place_push_x:+.3f} m。"
+                f"下降完成，灵巧手保持闭合，开始{tail_motion}："
+                f"base_link x 前推={self.post_place_push_x:+.3f} m，"
+                f"回撤 x=-{self.post_place_retract_x:.3f} m，"
+                f"双臂 y 外展={self.post_place_spread_y:.3f} m，"
+                f"下放 z=-{self.post_place_lower_z:.3f} m。"
             )
             self._publish_status(
                 "place",
                 "push",
                 "info",
-                f"开始放置后前推，base_link x={self.post_place_push_x:+.3f}m",
+                f"开始{tail_motion}，x={self.post_place_push_x:+.3f}m，"
+                f"回撤={self.post_place_retract_x:.3f}m，外展={self.post_place_spread_y:.3f}m，"
+                f"下放={self.post_place_lower_z:.3f}m",
             )
             if not self._send_cached_object_push_goal(
-                "双臂缓存放置后前推",
+                f"双臂缓存放置后{tail_motion}",
                 allow_motion_timeout=False,
             ):
-                self._publish_status("place", "push", "fail", "放置后前推失败，保持灵巧手闭合并停止流程")
+                self._publish_status("place", "push", "fail", f"{tail_motion}失败，保持灵巧手闭合并停止流程")
                 return False
-            self._publish_status("place", "push", "ok", "放置后前推轨迹执行完成")
-        else:
-            self.get_logger().info("post_place_push_x 为 0，跳过放置后前推阶段。")
+            self._publish_status("place", "push", "ok", f"{tail_motion}轨迹执行完成")
+        elif not tail_motion:
+            self.get_logger().info("前推和回撤下放位移均为 0，跳过放置后续阶段。")
 
-        self.get_logger().info("放置后前推完成，开始张开灵巧手。")
-        self._publish_status("hand", "command", "info", "放置后前推完成，开始张开灵巧手")
+        self.get_logger().info("放置动作完成，开始张开灵巧手。")
+        self._publish_status("hand", "command", "info", "放置动作完成，开始张开灵巧手")
         if not self._send_hands_command(grasp=False):
             return False
 
