@@ -21,7 +21,7 @@ Environment="ROS_DOMAIN_ID=22"
 Environment="CYCLONEDDS_URI=/home/coral/dds/cyclonedds.xml"
 
 # 可选参数
-Environment="DEPLOY_SETTLE_SECONDS=60"
+Environment="DEPLOY_SETTLE_SECONDS=30"
 Environment="MONITOR_INTERVAL_SECONDS=10"
 Environment="STOP_TIMEOUT_SECONDS=10"
 

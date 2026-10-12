@@ -42,7 +42,7 @@ readonly RUNTIME_DIR="/run/robot_stack_monitor"
 readonly STATE_FILE="${RUNTIME_DIR}/robot_stack.state"
 
 # ---------- 参数 ----------
-readonly DEPLOY_SETTLE_SECONDS="${DEPLOY_SETTLE_SECONDS:-60}"
+readonly DEPLOY_SETTLE_SECONDS="${DEPLOY_SETTLE_SECONDS:-30}"
 readonly MONITOR_INTERVAL_SECONDS="${MONITOR_INTERVAL_SECONDS:-10}"
 readonly STOP_TIMEOUT_SECONDS="${STOP_TIMEOUT_SECONDS:-10}"
 
