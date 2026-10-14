@@ -283,12 +283,22 @@ right_orientation_rpy_offset = 0.3,0.0,0.15
 object_to_tool_orientation_mode = from_tool_orientation
 ```
 
-`object_to_left_tool_xyz` 和 `object_to_right_tool_xyz` 仍然表示箱体中心到左右末端的相对位置，默认与抓取点偏移保持一致：
+`object_to_left_tool_xyz` 和 `object_to_right_tool_xyz` 表示箱体中心到左右末端的基础相对位置，
+默认与抓取点偏移保持一致：
 
 ```text
-object_to_left_tool_xyz = 0.01,0.184,0.08
-object_to_right_tool_xyz = 0.01,-0.184,0.08
+object_to_left_tool_xyz = 0.01,0.180,0.08
+object_to_right_tool_xyz = 0.01,-0.180,0.08
+left_grasp_delta_xyz = 0.0,0.0,0.0
+right_grasp_delta_xyz = 0.0,0.0,0.0
 ```
+
+只调整单侧工具点位置时，在 `robot_stack.launch.py` 中修改对应的 `*_grasp_delta_xyz`
+默认值，顺序为 X、Y、Z，单位为米。例如右臂降低 3 cm，设置
+`right_grasp_delta_xyz = 0.0,0.0,-0.03`。同一增量同时用于抓取目标和箱体上抬、
+下降、前推规划，左臂和箱体中心路径不变。增量在节点启动时读取；修改后重启抓取栈，
+新的抓取任务才会使用新值。不要再为这项微调手动修改 `object_to_right_tool_xyz`，
+否则偏置会重复叠加。
 
 旋转不再需要在 launch 中显式写 `object_to_*_tool_xyzw`。
 

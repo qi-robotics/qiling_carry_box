@@ -102,6 +102,8 @@ class MoveItGoalCommander(Node):
         self.declare_parameter("object_cartesian_waypoint_count", 10)
         self.declare_parameter("object_to_left_tool_xyz", "0.01,0.184,0.08")
         self.declare_parameter("object_to_right_tool_xyz", "0.01,-0.184,0.08")
+        self.declare_parameter("left_grasp_delta_xyz", "0.0,0.0,0.0")
+        self.declare_parameter("right_grasp_delta_xyz", "0.0,0.0,0.0")
         self.declare_parameter("object_to_left_tool_xyzw", "-0.5123,0.4873,-0.6335,0.3142")
         self.declare_parameter("object_to_right_tool_xyzw", "0.5123,0.4873,0.6335,0.3142")
         self.declare_parameter("object_to_tool_orientation_mode", "from_tool_orientation")
@@ -204,6 +206,13 @@ class MoveItGoalCommander(Node):
         self.actual_frame_names = self._parse_joint_names(self.get_parameter("actual_frame_names").value)
         self.goal_tf_prefix = str(self.get_parameter("goal_tf_prefix").value)
         self.tool_frame_offset_z = float(self.get_parameter("tool_frame_offset_z").value)
+        self._grasp_delta_xyz = {}
+        for side in ("left", "right"):
+            name = f"{side}_grasp_delta_xyz"
+            values = self._float_sequence_parameter(name, 3)
+            if not all(math.isfinite(value) for value in values):
+                raise ValueError(f"参数 {name} 必须是 3 个有限数值。")
+            self._grasp_delta_xyz[side] = np.array(values, dtype=float)
         self._last_goal_poses: Dict[str, PoseStamped] = {}
         self._cached_object_place_positions: Optional[List[List[float]]] = None
         self._cached_object_place_ready = False
@@ -3121,13 +3130,18 @@ class MoveItGoalCommander(Node):
             self.get_logger().info(text)
 
     def _object_to_tool_matrix(self, side: str) -> np.ndarray:
-        xyz = self._float_sequence_parameter(f"object_to_{side}_tool_xyz", 3)
+        # The object pose is normalized to identity orientation in this stack.
+        # Use the same per-arm position delta as the grasp target so the cached
+        # lift, place and push paths start at the adjusted grasp pose.
+        xyz = np.array(
+            self._float_sequence_parameter(f"object_to_{side}_tool_xyz", 3), dtype=float
+        ) + self._grasp_delta_xyz[side]
         orientation_mode = str(self.get_parameter("object_to_tool_orientation_mode").value).strip().lower()
         if orientation_mode in ("from_tool_orientation", "tool_orientation", "computed"):
             xyzw = self._tool_orientation_xyzw(side)
         else:
             xyzw = self._float_sequence_parameter(f"object_to_{side}_tool_xyzw", 4)
-        return self._translation_matrix(np.array(xyz, dtype=float)) @ self._quat_matrix(tuple(xyzw))
+        return self._translation_matrix(xyz) @ self._quat_matrix(tuple(xyzw))
 
     def _tool_orientation_xyzw(self, side: str) -> List[float]:
         base = self._quaternion_parameter(f"{side}_orientation_xyzw")

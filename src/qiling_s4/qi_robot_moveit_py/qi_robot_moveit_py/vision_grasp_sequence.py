@@ -82,6 +82,8 @@ class VisionGraspSequence(Node):
         self.declare_parameter("approach_x_offset", -0.05)
         self.declare_parameter("side_offset_y", 0.15)
         self.declare_parameter("approach_z_offset", 0.03)
+        self.declare_parameter("left_grasp_delta_xyz", "0.0,0.0,0.0")
+        self.declare_parameter("right_grasp_delta_xyz", "0.0,0.0,0.0")
         self.declare_parameter("lift_z", 0.03)
         self.declare_parameter("carry_x_offset", 0.0)
         self.declare_parameter("post_place_push_x", 0.0)
@@ -187,6 +189,14 @@ class VisionGraspSequence(Node):
         self.approach_x_offset = float(self.get_parameter("approach_x_offset").value)
         self.side_offset_y = float(self.get_parameter("side_offset_y").value)
         self.approach_z_offset = float(self.get_parameter("approach_z_offset").value)
+        self.left_grasp_delta_xyz = self._parse_float_list_parameter("left_grasp_delta_xyz", 3)
+        self.right_grasp_delta_xyz = self._parse_float_list_parameter("right_grasp_delta_xyz", 3)
+        for name, values in (
+            ("left_grasp_delta_xyz", self.left_grasp_delta_xyz),
+            ("right_grasp_delta_xyz", self.right_grasp_delta_xyz),
+        ):
+            if not all(math.isfinite(value) for value in values):
+                raise ValueError(f"{name} 必须是 3 个有限数值。")
         self.lift_z = float(self.get_parameter("lift_z").value)
         self.carry_x_offset = float(self.get_parameter("carry_x_offset").value)
         self.post_place_push_x = float(self.get_parameter("post_place_push_x").value)
@@ -434,6 +444,10 @@ class VisionGraspSequence(Node):
             f"抓取偏移：x={self.approach_x_offset:+.3f}, "
             f"left_y=+{self.side_offset_y:.3f}, right_y=-{self.side_offset_y:.3f}, "
             f"z={self.approach_z_offset:+.3f}, frame_id={self.frame_id}"
+        )
+        self.get_logger().info(
+            f"抓取位置增量（base_link，米）：left={self.left_grasp_delta_xyz}, "
+            f"right={self.right_grasp_delta_xyz}"
         )
         self._log_arm_targets("视觉抓取", left_grasp, right_grasp)
         self._publish_status("grasp", "ik_preplan", "info", "开始抓取IK预规划")
@@ -741,16 +755,18 @@ class VisionGraspSequence(Node):
         return None
 
     def _build_arm_poses(self, box_pose: Pose) -> tuple[Pose, Pose]:
+        left_dx, left_dy, left_dz = self.left_grasp_delta_xyz
+        right_dx, right_dy, right_dz = self.right_grasp_delta_xyz
         left_pose = Pose()
-        left_pose.position.x = float(box_pose.position.x) + self.approach_x_offset
-        left_pose.position.y = float(box_pose.position.y) + self.side_offset_y
-        left_pose.position.z = float(box_pose.position.z) + self.approach_z_offset
+        left_pose.position.x = float(box_pose.position.x) + self.approach_x_offset + left_dx
+        left_pose.position.y = float(box_pose.position.y) + self.side_offset_y + left_dy
+        left_pose.position.z = float(box_pose.position.z) + self.approach_z_offset + left_dz
         left_pose.orientation = self._copy_quaternion(self.left_orientation)
 
         right_pose = Pose()
-        right_pose.position.x = float(box_pose.position.x) + self.approach_x_offset
-        right_pose.position.y = float(box_pose.position.y) - self.side_offset_y
-        right_pose.position.z = float(box_pose.position.z) + self.approach_z_offset
+        right_pose.position.x = float(box_pose.position.x) + self.approach_x_offset + right_dx
+        right_pose.position.y = float(box_pose.position.y) - self.side_offset_y + right_dy
+        right_pose.position.z = float(box_pose.position.z) + self.approach_z_offset + right_dz
         right_pose.orientation = self._copy_quaternion(self.right_orientation)
         return left_pose, right_pose
 
