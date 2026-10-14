@@ -39,6 +39,8 @@ from urdf_parser_py.urdf import URDF
 from visualization_msgs.msg import Marker, MarkerArray
 
 from qi_robot_moveit_py.joint_state_safety import JointStateFrameGuard
+from qi_robot_moveit_py.movel_path import JointLine, plan_joint_line
+from qi_robot_moveit_py.ruckig_path import plan_joint_path
 
 
 ERROR_CODE_NAMES: Dict[int, str] = {
@@ -126,6 +128,10 @@ class MoveItGoalCommander(Node):
         self.declare_parameter("direct_max_velocity", 0.45)
         self.declare_parameter("direct_max_acceleration", 0.80)
         self.declare_parameter("direct_max_jerk", 2.50)
+        self.declare_parameter("movel_grasp_lift_enabled", True)
+        self.declare_parameter("movel_cartesian_step_m", 0.010)
+        self.declare_parameter("movel_max_position_error_m", 0.020)
+        self.declare_parameter("movel_max_orientation_error_rad", 0.15)
         self.declare_parameter("direct_min_segment_duration", 0.12)
         self.declare_parameter("direct_max_duration_scale", 1.50)
         self.declare_parameter("direct_joint_jump_warn_threshold", 0.25)
@@ -198,6 +204,7 @@ class MoveItGoalCommander(Node):
         self._cached_object_push_ready = False
         self._cached_object_push_pending_place = False
         self._cached_named_trajectories: Dict[str, List[List[float]]] = {}
+        self._cached_movel_samples: Dict[str, List[tuple[float, list[float], list[float], list[float]]]] = {}
         self._cached_named_place_trajectories: Dict[str, List[List[float]]] = {}
         self._cached_named_push_trajectories: Dict[str, List[List[float]]] = {}
         self._planning_sequence = 0
@@ -579,7 +586,9 @@ class MoveItGoalCommander(Node):
     def _dispatch_pose_service_goal(self, request: MoveItArmGoal.Request) -> None:
         if bool(getattr(request, "use_cached_plan", False)):
             cache_key = str(getattr(request, "cache_key", "") or "grasp")
-            self._send_cached_named_trajectory(cache_key, "双臂缓存抓取")
+            self._send_cached_named_trajectory(
+                cache_key, "双臂缓存抓取", prefix=self._request_joint_waypoints(request)
+            )
             return
         if request.target == MoveItArmGoal.Request.TARGET_LEFT:
             goal = self._normalized_pose_goal(
@@ -683,7 +692,7 @@ class MoveItGoalCommander(Node):
     def _dispatch_cached_object_place_service_goal(self, request: MoveItArmGoal.Request) -> None:
         if request.target != MoveItArmGoal.Request.TARGET_BOTH:
             raise ValueError("COMMAND_OBJECT_EXECUTE_PLACE 只支持 target=3 双臂刚体搬运。")
-        self._send_cached_object_place_trajectory()
+        self._send_cached_object_place_trajectory(combine_push=bool(request.combine_place_push))
 
     def _dispatch_cached_object_push_service_goal(self, request: MoveItArmGoal.Request) -> None:
         if request.target != MoveItArmGoal.Request.TARGET_BOTH:
@@ -716,7 +725,31 @@ class MoveItGoalCommander(Node):
             raise ValueError("关节目标 position 为空。")
 
         arm_name = self._target_to_arm_name(request.target)
+        prefix = self._request_joint_waypoints(request, self.arms[arm_name])
+        if prefix:
+            arm = self.arms[arm_name]
+            if self._direct_busy[arm_name]:
+                raise ValueError(f"{arm_name} 控制器正在执行上一条轨迹。")
+            names = list(joint_goal.name) or list(arm.关节名)
+            if len(names) != len(joint_goal.position) or set(names) != set(arm.关节名):
+                raise ValueError("关节路径终点的关节名或位置数量不正确。")
+            target = self._ordered_positions(arm, names, joint_goal.position)
+            self._moveit_busy = True
+            self._send_direct_joint_trajectory(arm, prefix + [target], result_label=f"{arm_name} 关节路径")
+            return
         self._on_joint_goal(arm_name, joint_goal)
+
+    def _request_joint_waypoints(
+        self, request: MoveItArmGoal.Request, arm: Optional[ArmConfig] = None
+    ) -> List[List[float]]:
+        arm = arm or self.arms["both_arms"]
+        result = []
+        for waypoint in request.joint_waypoints:
+            names = list(waypoint.name) or list(arm.关节名)
+            if len(names) != len(waypoint.position) or set(names) != set(arm.关节名):
+                raise ValueError("关节路径中间点的关节名或位置数量不正确。")
+            result.append(self._ordered_positions(arm, names, waypoint.position))
+        return result
 
     def _target_to_arm_name(self, target: int) -> str:
         if target == MoveItArmGoal.Request.TARGET_LEFT:
@@ -1316,6 +1349,10 @@ class MoveItGoalCommander(Node):
                 self._moveit_busy = False
             return
 
+        if str(self.get_parameter("direct_time_parameterization").value).strip().lower() == "ruckig":
+            self._send_direct_joint_trajectory(arm, [target], result_label=f"{arm.名称} 关节目标")
+            return
+
         goal = FollowJointTrajectory.Goal()
         goal.trajectory.joint_names = arm.关节名
         goal.trajectory.points = self._quintic_trajectory_points(start, target)
@@ -1461,6 +1498,13 @@ class MoveItGoalCommander(Node):
                 self._moveit_busy = False
             return
 
+        if str(self.get_parameter("direct_time_parameterization").value).strip().lower() == "ruckig":
+            self._send_ruckig_joint_trajectory(
+                arm, controller, positions, result_label, start_from_first_point,
+                hold_after_index, hold_duration, goal_position_tolerance,
+            )
+            return
+
         duration = max(float(self.get_parameter("direct_motion_duration").value), 0.1)
         raw_count = len(positions)
         positions = self._smooth_joint_waypoints(positions)
@@ -1515,6 +1559,59 @@ class MoveItGoalCommander(Node):
                 f"{result_label}使用独立终点容差 {goal_position_tolerance:.4f} rad。"
             )
 
+        self._direct_busy[arm.名称] = True
+        self._direct_result_labels[arm.名称] = result_label
+        future = controller.send_goal_async(goal)
+        future.add_done_callback(lambda fut, name=arm.名称: self._on_direct_goal_response(name, fut))
+
+    def _send_ruckig_joint_trajectory(
+        self,
+        arm: ArmConfig,
+        controller,
+        positions: List[List[float]],
+        result_label: str,
+        start_from_first_point: bool,
+        hold_after_index: Optional[int],
+        hold_duration: float,
+        goal_position_tolerance: float,
+    ) -> None:
+        # The first sample is the actual robot state. This also avoids the
+        # bridge's extra start hold/blend on an already time-parameterized path.
+        if not start_from_first_point:
+            positions = [self._current_positions(arm)] + positions
+            if hold_after_index is not None:
+                hold_after_index += 1
+        self._log_waypoint_joint_steps(arm, positions)
+        self._log_waypoint_joint_ranges(arm, positions)
+        samples = plan_joint_path(
+            positions,
+            max_velocity=float(self.get_parameter("direct_max_velocity").value),
+            max_acceleration=float(self.get_parameter("direct_max_acceleration").value),
+            max_jerk=float(self.get_parameter("direct_max_jerk").value),
+            sample_period=float(self.get_parameter("direct_sample_period").value),
+            hold_after_index=hold_after_index,
+            hold_duration=max(0.0, float(hold_duration)),
+        )
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory.joint_names = arm.关节名
+        goal.trajectory.header.stamp = self.get_clock().now().to_msg()
+        goal.trajectory.header.frame_id = "moveit_hold_target_start"
+        for stamp, position, velocity, acceleration in samples:
+            point = JointTrajectoryPoint()
+            point.positions = position
+            point.velocities = velocity
+            point.accelerations = acceleration
+            point.time_from_start = self._duration_msg(stamp)
+            goal.trajectory.points.append(point)
+        if goal_position_tolerance > 1e-9:
+            goal.goal_tolerance = [
+                JointTolerance(name=name, position=goal_position_tolerance)
+                for name in arm.关节名
+            ]
+        self.get_logger().info(
+            f"{result_label} Ruckig: waypoints={len(positions)}, "
+            f"samples={len(samples)}, duration={samples[-1][0]:.3f}s"
+        )
         self._direct_busy[arm.名称] = True
         self._direct_result_labels[arm.名称] = result_label
         future = controller.send_goal_async(goal)
@@ -2142,6 +2239,9 @@ class MoveItGoalCommander(Node):
         plan_only: bool = False,
         cache_key: str = "lift_place",
     ) -> None:
+        if plan_only and cache_key == "lift_place":
+            self._cached_movel_samples.pop(cache_key, None)
+            self._cached_named_trajectories.pop(cache_key, None)
         if not self._compute_ik.wait_for_service(timeout_sec=self._moveit_service_wait_sec):
             self.get_logger().error("MoveIt /compute_ik 服务不可用，无法预规划箱体放置路径。")
             self._publish_status("both_arms 失败：/compute_ik 服务不可用", "both_arms")
@@ -2172,7 +2272,10 @@ class MoveItGoalCommander(Node):
         object_push.pose.position.x += push_x
 
         steps_per_leg = max(int(self.get_parameter("object_cartesian_waypoint_count").value), 2)
-        up_waypoints = self._interpolate_pose_waypoints(object_start, object_lift, steps_per_leg)
+        lift_steps = steps_per_leg
+        if plan_only and cache_key == "lift_place" and self._movel_enabled():
+            lift_steps = self._movel_step_count(lift_steps, self._pose_distance(object_start, object_lift))
+        up_waypoints = self._interpolate_pose_waypoints(object_start, object_lift, lift_steps)
         down_waypoints = self._interpolate_pose_waypoints(object_lift, object_place_shifted, steps_per_leg)
         push_waypoints = (
             self._interpolate_pose_waypoints(object_place_shifted, object_push, steps_per_leg)
@@ -2188,7 +2291,7 @@ class MoveItGoalCommander(Node):
         plan = {
             "index": 0,
             "steps": len(object_waypoints),
-            "lift_steps": steps_per_leg,
+            "lift_steps": lift_steps,
             "push_steps": len(push_waypoints),
             "cache_place_after_lift": True,
             "frame_id": frame_id,
@@ -2211,7 +2314,7 @@ class MoveItGoalCommander(Node):
         self._cached_object_push_pending_place = False
         self._moveit_busy = True
         self.get_logger().info(
-            f"箱体放置预规划：上抬 {steps_per_leg} 点 + 下降 {steps_per_leg} 点"
+            f"箱体放置预规划：上抬 {lift_steps} 点 + 下降 {steps_per_leg} 点"
             + (f" + 放置后前推 {len(push_waypoints)} 点" if push_waypoints else "")
             + f"，lift_z={lift_z:+.3f}m，post_place_push_x={push_x:+.3f}m；"
             + ("本次只预规划并缓存，不执行。" if plan_only else "本次只执行上抬，下降轨迹缓存等待放置指令。")
@@ -2226,6 +2329,9 @@ class MoveItGoalCommander(Node):
         plan_only: bool = True,
         cache_key: str = "lift_place",
     ) -> None:
+        if plan_only and cache_key == "lift_place":
+            self._cached_movel_samples.pop(cache_key, None)
+            self._cached_named_trajectories.pop(cache_key, None)
         if not self._compute_ik.wait_for_service(timeout_sec=self._moveit_service_wait_sec):
             raise ValueError("MoveIt /compute_ik 服务不可用，无法规划关节抓取后的上抬/下降。")
 
@@ -2267,9 +2373,13 @@ class MoveItGoalCommander(Node):
         right_push.pose.position.x += push_x
 
         steps_per_leg = max(int(self.get_parameter("object_cartesian_waypoint_count").value), 2)
-        left_waypoints = self._interpolate_pose_waypoints(left_start, left_lift, steps_per_leg)
+        lift_steps = steps_per_leg
+        if plan_only and cache_key == "lift_place" and self._movel_enabled():
+            distance = max(self._pose_distance(left_start, left_lift), self._pose_distance(right_start, right_lift))
+            lift_steps = self._movel_step_count(lift_steps, distance)
+        left_waypoints = self._interpolate_pose_waypoints(left_start, left_lift, lift_steps)
         left_waypoints += self._interpolate_pose_waypoints(left_lift, left_place, steps_per_leg)
-        right_waypoints = self._interpolate_pose_waypoints(right_start, right_lift, steps_per_leg)
+        right_waypoints = self._interpolate_pose_waypoints(right_start, right_lift, lift_steps)
         right_waypoints += self._interpolate_pose_waypoints(right_lift, right_place, steps_per_leg)
         push_steps = 0
         if abs(push_x) > 1.0e-6:
@@ -2279,7 +2389,7 @@ class MoveItGoalCommander(Node):
         plan = {
             "index": 0,
             "steps": len(left_waypoints),
-            "lift_steps": steps_per_leg,
+            "lift_steps": lift_steps,
             "push_steps": push_steps,
             "cache_place_after_lift": True,
             "frame_id": frame_id,
@@ -2346,6 +2456,14 @@ class MoveItGoalCommander(Node):
 
         if plan.get("plan_only"):
             cache_key = str(plan.get("cache_key") or "lift_place")
+            if cache_key == "lift_place" and self._movel_enabled():
+                try:
+                    self._cache_movel_line(cache_key, plan, lift_positions, lift_steps)
+                except ValueError as exc:
+                    self._moveit_busy = False
+                    self.get_logger().error(f"箱体上抬 MoveL 预规划失败：{exc}")
+                    self._publish_status(f"both_arms 失败：上抬 MoveL {exc}", "both_arms")
+                    return
             self._cached_named_trajectories[cache_key] = lift_positions
             self._cached_named_place_trajectories[cache_key] = place_positions
             if push_positions:
@@ -2392,7 +2510,9 @@ class MoveItGoalCommander(Node):
             }
         return {name: self._joint_state[name] for name in self.arms["both_arms"].关节名}
 
-    def _send_cached_named_trajectory(self, cache_key: str, label: str) -> None:
+    def _send_cached_named_trajectory(
+        self, cache_key: str, label: str, *, prefix: Optional[List[List[float]]] = None
+    ) -> None:
         positions = self._cached_named_trajectories.get(cache_key)
         if not positions:
             raise ValueError(f"没有缓存轨迹 cache_key={cache_key}，请先完成预规划。")
@@ -2413,6 +2533,13 @@ class MoveItGoalCommander(Node):
                 f"恢复 lift_place 缓存：lift_points={len(positions)}, place_points={len(place_positions)}, "
                 f"push_points={len(push_positions) if push_positions else 0}。"
             )
+        if self._movel_enabled() and cache_key in ("grasp", "lift_place"):
+            if cache_key not in self._cached_movel_samples:
+                raise ValueError(f"缺少 {cache_key} MoveL 缓存，请重新预规划。")
+            self._send_cached_movel_trajectory(cache_key, label, prefix or [])
+            return
+        if prefix:
+            positions = [list(point) for point in prefix] + [list(point) for point in positions]
         self._moveit_busy = True
         self.get_logger().info(f"{label}开始执行缓存轨迹 cache_key={cache_key}, points={len(positions)}。")
         self._send_direct_joint_trajectory(
@@ -2420,6 +2547,133 @@ class MoveItGoalCommander(Node):
             [list(point) for point in positions],
             result_label=label,
         )
+
+    def _movel_enabled(self) -> bool:
+        return bool(self.get_parameter("movel_grasp_lift_enabled").value)
+
+    def _movel_step_count(self, minimum: int, distance: float) -> int:
+        step_m = float(self.get_parameter("movel_cartesian_step_m").value)
+        if not math.isfinite(step_m) or step_m <= 0:
+            raise ValueError("movel_cartesian_step_m 必须为正数")
+        return max(minimum, math.ceil(distance / step_m))
+
+    @staticmethod
+    def _pose_distance(a: PoseStamped, b: PoseStamped) -> float:
+        return math.sqrt(sum(
+            (float(getattr(a.pose.position, axis)) - float(getattr(b.pose.position, axis))) ** 2
+            for axis in ("x", "y", "z")
+        ))
+
+    def _cache_movel_line(self, key: str, plan: dict, positions: List[List[float]], count: int) -> None:
+        arm = self.arms["both_arms"]
+        seed = plan["initial_seed"]
+        start = [float(seed[name]) for name in arm.关节名]
+        left = [plan["left_start"]] + plan["left_waypoints"][:count]
+        right = [plan["right_start"]] + plan["right_waypoints"][:count]
+        distances = [self._pose_distance(a, b) for a, b in zip(left[:-1], left[1:])]
+        total = sum(distances)
+        if total < 1e-5:
+            raise ValueError("笛卡尔直线长度过短")
+        progress = np.cumsum([0.0] + distances) / total
+        line = JointLine(progress, [start] + positions)
+
+        max_pos = float(self.get_parameter("movel_max_position_error_m").value)
+        max_angle = float(self.get_parameter("movel_max_orientation_error_rad").value)
+        if max_pos <= 0 or max_angle <= 0:
+            raise ValueError("MoveL 路径误差阈值必须大于零")
+        worst_pos = worst_angle = 0.0
+        for s in np.linspace(0.0, 1.0, max(2, 4 * count + 1)):
+            q, _, _, _ = line.at(float(s))
+            joint_map = dict(zip(arm.关节名, q))
+            if self._robot_model is not None:
+                for joint_name, value in joint_map.items():
+                    joint = self._robot_model.joint_map.get(joint_name)
+                    limit = joint.limit if joint is not None else None
+                    if limit is not None and limit.lower is not None and limit.upper is not None and (
+                        value < float(limit.lower) - 1e-6 or value > float(limit.upper) + 1e-6
+                    ):
+                        raise ValueError(f"{joint_name} 在路径 {float(s):.2f} 处超出 URDF 关节限位")
+            for name, endpoints in (("left_arm", left), ("right_arm", right)):
+                actual = self._compute_tool_pose_from_positions(name, joint_map)
+                if actual is None or not self._fk_chains.get(name):
+                    raise ValueError(f"{name} 正运动学不可用，无法检查 MoveL 路径")
+                expected_start, expected_end = endpoints[0], endpoints[-1]
+                expected = PoseStamped()
+                for axis in ("x", "y", "z"):
+                    setattr(expected.pose.position, axis, self._lerp(
+                        getattr(expected_start.pose.position, axis),
+                        getattr(expected_end.pose.position, axis), float(s),
+                    ))
+                qa = self._quat_tuple(expected_start.pose.orientation)
+                qb = self._quat_tuple(expected_end.pose.orientation)
+                expected_q = self._slerp(qa, qb, float(s))
+                actual_q = self._quat_tuple(actual.pose.orientation)
+                angle = 2 * math.acos(min(1.0, abs(sum(a * b for a, b in zip(expected_q, actual_q)))))
+                error = self._pose_distance(expected, actual)
+                worst_pos = max(worst_pos, error)
+                worst_angle = max(worst_angle, angle)
+                if error > max_pos or angle > max_angle:
+                    raise ValueError(
+                        f"{name} 在路径 {float(s):.2f} 处偏离直线："
+                        f"位置 {error:.3f}m / {max_pos:.3f}m，姿态 {angle:.3f}rad / {max_angle:.3f}rad"
+                    )
+        samples = plan_joint_line(
+            line,
+            max_velocity=float(self.get_parameter("direct_max_velocity").value),
+            max_acceleration=float(self.get_parameter("direct_max_acceleration").value),
+            max_jerk=float(self.get_parameter("direct_max_jerk").value),
+            sample_period=float(self.get_parameter("direct_sample_period").value),
+        )
+        self._cached_movel_samples[key] = samples
+        self.get_logger().info(
+            f"{key} MoveL 已缓存：IK 点={len(positions)}, 轨迹点={len(samples)}, "
+            f"时长={samples[-1][0]:.3f}s, 最大路径偏差={worst_pos:.4f}m/{worst_angle:.3f}rad。"
+        )
+
+    def _send_cached_movel_trajectory(self, key: str, label: str, prefix: List[List[float]]) -> None:
+        arm = self.arms["both_arms"]
+        samples = self._cached_movel_samples[key]
+        line_start = samples[0][1]
+        current = self._current_positions(arm)
+        if prefix and max(abs(a - b) for a, b in zip(prefix[-1], line_start)) > 1e-4:
+            raise ValueError(f"{key} 的预抓取关节终点与 MoveL 起点不一致，请重新预规划")
+        if not prefix:
+            tolerance = max(float(self.get_parameter("cached_place_start_tolerance").value), 0.10)
+            if max(abs(a - b) for a, b in zip(current, line_start)) > tolerance:
+                raise ValueError(f"{key} 当前关节状态偏离 MoveL 起点超过 {tolerance:.3f}rad")
+        bridge_points = [current] + (prefix or [line_start])
+        bridge = plan_joint_path(
+            bridge_points,
+            max_velocity=float(self.get_parameter("direct_max_velocity").value),
+            max_acceleration=float(self.get_parameter("direct_max_acceleration").value),
+            max_jerk=float(self.get_parameter("direct_max_jerk").value),
+            sample_period=float(self.get_parameter("direct_sample_period").value),
+        )
+        offset = bridge[-1][0]
+        combined = bridge + [(offset + t, q, v, a) for t, q, v, a in samples[1:]]
+        controller = self._trajectory_controllers[arm.名称]
+        if self._direct_busy[arm.名称] or not controller.wait_for_server(timeout_sec=2.0):
+            raise ValueError(f"{label} 控制器正在执行或 action 不可用")
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory.joint_names = arm.关节名
+        goal.trajectory.header.stamp = self.get_clock().now().to_msg()
+        goal.trajectory.header.frame_id = "moveit_hold_target_start"
+        for stamp, q, velocity, acceleration in combined:
+            point = JointTrajectoryPoint()
+            point.positions = q
+            point.velocities = velocity
+            point.accelerations = acceleration
+            point.time_from_start = self._duration_msg(stamp)
+            goal.trajectory.points.append(point)
+        self._moveit_busy = True
+        self._direct_busy[arm.名称] = True
+        self._direct_result_labels[arm.名称] = label
+        self.get_logger().info(
+            f"{label} MoveL：桥接 {offset:.3f}s + 直线 {samples[-1][0]:.3f}s，"
+            f"总点数 {len(combined)}。"
+        )
+        future = controller.send_goal_async(goal)
+        future.add_done_callback(lambda fut, name=arm.名称: self._on_direct_goal_response(name, fut))
 
     def _check_cached_trajectory_start_alignment(
         self,
@@ -2458,7 +2712,7 @@ class MoveItGoalCommander(Node):
             f"joint={joint_name}, error={max_error:.4f} rad > {tolerance:.4f} rad"
         )
 
-    def _send_cached_object_place_trajectory(self) -> None:
+    def _send_cached_object_place_trajectory(self, *, combine_push: bool = False) -> None:
         if not self._cached_object_place_positions or not self._cached_object_place_ready:
             raise ValueError("没有可执行的缓存放置轨迹，请先完成抓取上抬预规划，并确认上抬执行成功。")
         both_arm = self.arms["both_arms"]
@@ -2473,6 +2727,15 @@ class MoveItGoalCommander(Node):
         except ValueError as exc:
             raise ValueError(f"无法执行缓存放置轨迹：{exc}") from exc
 
+        if combine_push and not self._cached_object_push_positions:
+            raise ValueError("请求合并下降和前推，但没有缓存前推轨迹。")
+        if combine_push:
+            push = self._cached_object_push_positions
+            if max(abs(a - b) for a, b in zip(cached[-1], push[0])) > 1e-5:
+                raise ValueError("缓存下降终点与前推起点不连续，拒绝合并执行。")
+            cached.extend([list(point) for point in push[1:]])
+            self._cached_object_push_positions = None
+
         self._cached_object_place_positions = None
         self._cached_object_place_ready = False
         self._cached_object_place_pending_lift = False
@@ -2481,7 +2744,7 @@ class MoveItGoalCommander(Node):
         self._moveit_busy = True
         self.get_logger().info(
             f"收到缓存放置执行请求：当前状态与缓存上抬终点最大误差 {max_error:.4f} rad，"
-            f"开始直发下降轨迹 {len(cached)} 点。"
+            f"开始直发{'下降+前推' if combine_push else '下降'}轨迹 {len(cached)} 点。"
         )
         self._send_direct_joint_trajectory(
             both_arm,
@@ -2489,7 +2752,10 @@ class MoveItGoalCommander(Node):
             start_from_first_point=not bool(
                 self.get_parameter("cached_trajectory_start_blend_enabled").value
             ),
-            result_label="双臂缓存放置下降",
+            result_label="双臂缓存放置下降+前推" if combine_push else "双臂缓存放置下降",
+            goal_position_tolerance=(
+                float(self.get_parameter("cached_push_goal_tolerance").value) if combine_push else 0.0
+            ),
         )
 
     def _send_cached_object_push_trajectory(self) -> None:
@@ -2828,6 +3094,9 @@ class MoveItGoalCommander(Node):
         cache_key: str = "grasp",
         max_joint_step: float = 0.0,
     ) -> None:
+        if plan_only and cache_key == "grasp":
+            self._cached_movel_samples.pop(cache_key, None)
+            self._cached_named_trajectories.pop(cache_key, None)
         if not self._compute_ik.wait_for_service(timeout_sec=self._moveit_service_wait_sec):
             self.get_logger().error(
                 "MoveIt /compute_ik 服务不可用，无法执行双臂笛卡尔路径。"
@@ -2856,6 +3125,9 @@ class MoveItGoalCommander(Node):
             return
 
         steps = max(int(self.get_parameter("cartesian_waypoint_count").value), 2)
+        if plan_only and cache_key == "grasp" and self._movel_enabled():
+            length = max(self._pose_distance(left_start, left_goal), self._pose_distance(right_start, right_goal))
+            steps = self._movel_step_count(steps, length)
         self._planning_sequence += 1
         plan = {
             "plan_id": f"cartesian-{self._planning_sequence:06d}",
@@ -3246,6 +3518,14 @@ class MoveItGoalCommander(Node):
             return
         if plan.get("plan_only"):
             cache_key = str(plan.get("cache_key") or "grasp")
+            if cache_key == "grasp" and self._movel_enabled():
+                try:
+                    self._cache_movel_line(cache_key, plan, positions, len(positions))
+                except ValueError as exc:
+                    self._moveit_busy = False
+                    self.get_logger().error(f"抓取 MoveL 预规划失败：{exc}")
+                    self._publish_status(f"both_arms 失败：抓取 MoveL {exc}", "both_arms")
+                    return
             self._cached_named_trajectories[cache_key] = [list(point) for point in positions]
             self._moveit_busy = False
             self.get_logger().info(

@@ -140,11 +140,13 @@ class VisionGraspSequence(Node):
         self.declare_parameter("carry_ik_seed_preset", "carry")
         self.declare_parameter("place_ik_seed_preset", "place")
         self.declare_parameter("use_pregrasp_joint_goal", False)
+        self.declare_parameter("combined_task_trajectories", False)
         self.declare_parameter(
             "pregrasp_transition_joint_positions",
             "0.9,0.2,0.0,-1.9,0.0,0.0,0.0,"
             "0.9,-0.2,0.0,-1.9,0.0,0.0,0.0",
         )
+        self.declare_parameter("pregrasp_middle_joint_positions", "")
         self.declare_parameter(
             "pregrasp_joint_positions",
             "0.0,0.1,0.0,-1.7,0.0,0.0,0.0,"
@@ -261,9 +263,15 @@ class VisionGraspSequence(Node):
         self.carry_ik_seed_preset = str(self.get_parameter("carry_ik_seed_preset").value)
         self.place_ik_seed_preset = str(self.get_parameter("place_ik_seed_preset").value)
         self.use_pregrasp_joint_goal = bool(self.get_parameter("use_pregrasp_joint_goal").value)
+        self.combined_task_trajectories = bool(
+            self.get_parameter("combined_task_trajectories").value
+        )
         self.pregrasp_transition_joint_positions = self._parse_optional_float_list_parameter(
             "pregrasp_transition_joint_positions",
             14,
+        )
+        self.pregrasp_middle_joint_positions = self._parse_optional_float_list_parameter(
+            "pregrasp_middle_joint_positions", 14
         )
         self.pregrasp_joint_positions = self._parse_float_list_parameter("pregrasp_joint_positions", 14)
         self.home_joint_positions = self._parse_float_list_parameter("home_joint_positions", 14)
@@ -458,7 +466,7 @@ class VisionGraspSequence(Node):
         if self.use_pregrasp_joint_goal:
             if self.precheck_grasp_ik_before_pregrasp and not self._precheck_both_grasp_ik(left_grasp, right_grasp):
                 return False
-            if self.pregrasp_transition_joint_positions:
+            if self.pregrasp_transition_joint_positions and not self.combined_task_trajectories:
                 self.get_logger().info("抓取目标 IK 预检查通过，开始发送预抓取过渡关节角目标。")
                 self._publish_status("grasp", "motion", "info", "开始预抓取过渡")
                 if not self._send_both_arm_joint_goal(
@@ -467,11 +475,12 @@ class VisionGraspSequence(Node):
                 ):
                     return False
                 self._publish_status("grasp", "motion", "ok", "预抓取过渡完成")
-            self.get_logger().info("开始发送预抓取关节角目标。")
-            self._publish_status("grasp", "motion", "info", "开始预抓取")
-            if not self._send_both_arm_joint_goal(self.pregrasp_joint_positions, "双臂预抓取"):
-                return False
-            self._publish_status("grasp", "motion", "ok", "预抓取完成")
+            if not self.combined_task_trajectories:
+                self.get_logger().info("开始发送预抓取关节角目标。")
+                self._publish_status("grasp", "motion", "info", "开始预抓取")
+                if not self._send_both_arm_joint_goal(self.pregrasp_joint_positions, "双臂预抓取"):
+                    return False
+                self._publish_status("grasp", "motion", "ok", "预抓取完成")
 
         self._publish_status("grasp", "motion", "info", "开始执行抓取轨迹")
         if not self._send_both_arm_pose_goal(
@@ -483,6 +492,7 @@ class VisionGraspSequence(Node):
             allow_motion_timeout=self.allow_contact_motion_timeout,
             use_cached_plan=True,
             cache_key="grasp",
+            joint_waypoints=self._grasp_prefix() if self.combined_task_trajectories else (),
         ):
             return False
         self._publish_status("grasp", "motion", "ok", "抓取轨迹执行完成")
@@ -582,7 +592,7 @@ class VisionGraspSequence(Node):
             return False
         self._publish_status("grasp", "ik_preplan", "ok", "关节角上抬/下降/放置后前推预规划完成")
 
-        if self.pregrasp_transition_joint_positions:
+        if self.pregrasp_transition_joint_positions and not self.combined_task_trajectories:
             self.get_logger().info("开始发送关节抓取预抓取过渡点。")
             self._publish_status("grasp", "motion", "info", "开始关节抓取预抓取过渡")
             if not self._send_both_arm_joint_goal(
@@ -591,14 +601,18 @@ class VisionGraspSequence(Node):
             ):
                 return False
             self._publish_status("grasp", "motion", "ok", "关节抓取预抓取过渡完成")
-        self.get_logger().info("开始发送关节抓取预抓取点。")
-        self._publish_status("grasp", "motion", "info", "开始关节抓取预抓取")
-        if not self._send_both_arm_joint_goal(self.pregrasp_joint_positions, "双臂关节抓取预抓取"):
-            return False
-        self._publish_status("grasp", "motion", "ok", "关节抓取预抓取完成")
+        if not self.combined_task_trajectories:
+            self.get_logger().info("开始发送关节抓取预抓取点。")
+            self._publish_status("grasp", "motion", "info", "开始关节抓取预抓取")
+            if not self._send_both_arm_joint_goal(self.pregrasp_joint_positions, "双臂关节抓取预抓取"):
+                return False
+            self._publish_status("grasp", "motion", "ok", "关节抓取预抓取完成")
         self.get_logger().info("开始发送调试得到的双臂抓取关节角。")
         self._publish_status("grasp", "motion", "info", "开始执行抓取关节角")
-        if not self._send_both_arm_joint_goal(positions, "双臂关节角抓取"):
+        if not self._send_both_arm_joint_goal(
+            positions, "双臂关节角抓取",
+            joint_waypoints=self._grasp_prefix() if self.combined_task_trajectories else (),
+        ):
             return False
         self._publish_status("grasp", "motion", "ok", "抓取关节角执行完成")
 
@@ -836,6 +850,7 @@ class VisionGraspSequence(Node):
         use_cached_plan: bool = False,
         cache_key: str = "",
         max_joint_step: float = 0.0,
+        joint_waypoints: Sequence[Sequence[float]] = (),
     ) -> bool:
         request = MoveItArmGoal.Request()
         request.target = MoveItArmGoal.Request.TARGET_BOTH
@@ -847,6 +862,7 @@ class VisionGraspSequence(Node):
         request.use_cached_plan = bool(use_cached_plan)
         request.cache_key = cache_key
         request.max_joint_step = float(max_joint_step)
+        request.joint_waypoints = self._joint_waypoint_messages(joint_waypoints)
         if self.use_pregrasp_joint_goal:
             request.joint_goal.name = self._both_arm_joint_names()
             request.joint_goal.position = [float(value) for value in self.pregrasp_joint_positions]
@@ -1052,6 +1068,9 @@ class VisionGraspSequence(Node):
         request.target = MoveItArmGoal.Request.TARGET_BOTH
         request.command_type = MoveItArmGoal.Request.COMMAND_OBJECT_EXECUTE_PLACE
         request.frame_id = self.frame_id
+        request.combine_place_push = bool(
+            self.combined_task_trajectories and abs(self.post_place_push_x) > 1e-6
+        )
 
         self.get_logger().info(f"{label}即将调用 {self.arm_goal_service_name}，执行缓存下降轨迹。")
 
@@ -1126,6 +1145,7 @@ class VisionGraspSequence(Node):
         label: str,
         *,
         on_goal_accepted: Optional[Callable[[], None]] = None,
+        joint_waypoints: Sequence[Sequence[float]] = (),
     ) -> bool:
         request = MoveItArmGoal.Request()
         request.target = MoveItArmGoal.Request.TARGET_BOTH
@@ -1133,6 +1153,7 @@ class VisionGraspSequence(Node):
         request.joint_goal = JointState()
         request.joint_goal.name = self._both_arm_joint_names()
         request.joint_goal.position = [float(value) for value in positions]
+        request.joint_waypoints = self._joint_waypoint_messages(joint_waypoints)
 
         self._log_joint_service_request(label, request.joint_goal.position)
 
@@ -1178,6 +1199,27 @@ class VisionGraspSequence(Node):
             "right_wrist_yaw_joint",
         ]
 
+    def _joint_waypoint_messages(self, points: Sequence[Sequence[float]]) -> list[JointState]:
+        names = self._both_arm_joint_names()
+        result = []
+        for values in points:
+            if len(values) != len(names):
+                raise ValueError("双臂关节路点必须包含 14 个关节值。")
+            waypoint = JointState()
+            waypoint.name = names
+            waypoint.position = [float(value) for value in values]
+            result.append(waypoint)
+        return result
+
+    def _grasp_prefix(self) -> list[list[float]]:
+        points = []
+        if self.pregrasp_transition_joint_positions:
+            points.append(self.pregrasp_transition_joint_positions)
+        if self.pregrasp_middle_joint_positions:
+            points.append(self.pregrasp_middle_joint_positions)
+        points.append(self.pregrasp_joint_positions)
+        return points
+
     def _wait_for_place_command(self) -> bool:
         while rclpy.ok() and not self._place_requested:
             time.sleep(0.05)
@@ -1192,17 +1234,24 @@ class VisionGraspSequence(Node):
         object_grasp: Optional[Pose] = None,
     ) -> bool:
         del left_lift, right_lift, left_grasp, right_grasp, object_grasp
-        self.get_logger().info("收到放置指令，执行抓取阶段已预规划缓存的刚体下降轨迹。")
-        self._publish_status("place", "motion", "info", "开始执行缓存下降轨迹")
+        place_motion = (
+            "下降+闭手前推"
+            if self.combined_task_trajectories and abs(self.post_place_push_x) > 1e-6
+            else "下降"
+        )
+        self.get_logger().info(f"收到放置指令，执行缓存的{place_motion}轨迹。")
+        self._publish_status("place", "motion", "info", f"开始执行缓存{place_motion}轨迹")
         self._set_ik_seed_preset(self.place_ik_seed_preset, "缓存放置下降")
         if not self._send_cached_object_place_goal(
             "双臂缓存放置下降",
-            allow_motion_timeout=self.allow_contact_motion_timeout,
+            allow_motion_timeout=(
+                self.allow_contact_motion_timeout and not self.combined_task_trajectories
+            ),
         ):
             return False
-        self._publish_status("place", "motion", "ok", "下降轨迹执行完成")
+        self._publish_status("place", "motion", "ok", f"{place_motion}轨迹执行完成")
 
-        if abs(self.post_place_push_x) > 1.0e-6:
+        if abs(self.post_place_push_x) > 1.0e-6 and not self.combined_task_trajectories:
             self.get_logger().info(
                 f"下降完成，灵巧手保持闭合，开始沿 base_link x 方向前推 "
                 f"{self.post_place_push_x:+.3f} m。"
@@ -1262,6 +1311,23 @@ class VisionGraspSequence(Node):
         publish_place_success_on_second_transition_start: bool = False,
     ) -> bool:
         max_attempts = max(1, self.home_retry_count + 1)
+        if self.combined_task_trajectories:
+            for attempt in range(1, max_attempts + 1):
+                label = "双臂回 home" if attempt == 1 else f"双臂回 home 重试 {attempt - 1}"
+                if self._send_both_arm_joint_goal(
+                    self.home_joint_positions,
+                    label,
+                    joint_waypoints=self.home_transition_joint_waypoints,
+                ):
+                    if publish_place_success_on_second_transition_start:
+                        self._publish_grasp_result("place success")
+                    return True
+                if attempt < max_attempts:
+                    end_time = time.monotonic() + self.home_retry_wait_sec
+                    while rclpy.ok() and time.monotonic() < end_time:
+                        time.sleep(0.05)
+            return False
+
         place_success_published = False
         for attempt in range(1, max_attempts + 1):
             label = "双臂回 home" if attempt == 1 else f"双臂回 home 重试 {attempt - 1}"

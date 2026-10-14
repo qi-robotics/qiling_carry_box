@@ -73,7 +73,6 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_rviz", default_value="true"),
-            DeclareLaunchArgument("ik_backend", default_value="pick_ik"),
             DeclareLaunchArgument("rviz_delay", default_value="3.0"),
             DeclareLaunchArgument("planning_debug_enabled", default_value="true"),
             DeclareLaunchArgument("planning_debug_topic", default_value="/moveit/planning_debug"),
@@ -243,16 +242,12 @@ def generate_launch_description():
                 condition=IfCondition(LaunchConfiguration("publish_fake_joint_states")),
             ),
             IncludeLaunchDescription(_package_launch("qi_robot_moveit_config", "rsp.launch.py")),
-            IncludeLaunchDescription(
-                _package_launch("qi_robot_moveit_config", "move_group.launch.py"),
-                launch_arguments={"ik_backend": LaunchConfiguration("ik_backend")}.items(),
-            ),
+            IncludeLaunchDescription(_package_launch("qi_robot_moveit_config", "move_group.launch.py")),
             TimerAction(
                 period=LaunchConfiguration("rviz_delay"),
                 actions=[
                     IncludeLaunchDescription(
-                        _package_launch("qi_robot_moveit_config", "moveit_rviz.launch.py"),
-                        launch_arguments={"ik_backend": LaunchConfiguration("ik_backend")}.items(),
+                        _package_launch("qi_robot_moveit_config", "moveit_rviz.launch.py")
                     )
                 ],
                 condition=IfCondition(LaunchConfiguration("use_rviz")),

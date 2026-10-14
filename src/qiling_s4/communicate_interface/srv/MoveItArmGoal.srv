@@ -45,6 +45,13 @@ geometry_msgs/Pose right_pose
 # - TARGET_BOTH: 14 positions, names optional.
 sensor_msgs/JointState joint_goal
 
+# Optional ordered joint waypoints before joint_goal, or before a cached grasp.
+# Each waypoint must contain the same joints as the selected target.
+sensor_msgs/JointState[] joint_waypoints
+
+# For COMMAND_OBJECT_EXECUTE_PLACE, run cached descent and push in one goal.
+bool combine_place_push
+
 # Object targets are interpreted as a carried object centroid target.
 # For TARGET_BOTH + COMMAND_OBJECT, fill object_pose. The goal commander
 # derives left/right tool targets from configurable object->tool offsets.

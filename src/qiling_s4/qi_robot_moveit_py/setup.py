@@ -12,7 +12,7 @@ setup(
         (f"share/{package_name}/config", ["config/ik_seed_presets.yaml"]),
         (f"share/{package_name}/launch", ["launch/goal_commander.launch.py", "launch/moveit_mit_bridge.launch.py"]),
     ],
-    install_requires=["setuptools"],
+    install_requires=["setuptools", "ruckig==0.9.2"],
     zip_safe=True,
     maintainer="zfy",
     maintainer_email="user@example.com",

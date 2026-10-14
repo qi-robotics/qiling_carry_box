@@ -25,7 +25,6 @@
   <exec_depend>moveit_planners_ompl</exec_depend>
   <exec_depend>moveit_simple_controller_manager</exec_depend>
   <exec_depend>pick_ik</exec_depend>
-  <exec_depend>qi_robot_pinocchio_ik</exec_depend>
   <exec_depend>joint_state_publisher</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>xacro</exec_depend>

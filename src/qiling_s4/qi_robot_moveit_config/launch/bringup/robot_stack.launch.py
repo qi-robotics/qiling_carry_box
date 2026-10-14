@@ -72,9 +72,8 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_rviz", default_value="true"),
-            DeclareLaunchArgument("ik_backend", default_value="pick_ik"),
             DeclareLaunchArgument("rviz_delay", default_value="3.0"),
-            DeclareLaunchArgument("object_cartesian_waypoint_count", default_value="5"),
+            DeclareLaunchArgument("object_cartesian_waypoint_count", default_value="10"),
             DeclareLaunchArgument("object_roundtrip_lift_z", default_value="0.10"),
             DeclareLaunchArgument("object_roundtrip_hold_sec", default_value="2.0"),
             DeclareLaunchArgument("direct_motion_duration", default_value="5.0"),
@@ -86,10 +85,14 @@ def generate_launch_description():
             DeclareLaunchArgument("direct_spline_smoothing_alpha", default_value="0.35"),
             DeclareLaunchArgument("direct_spline_max_joint_deviation", default_value="0.08"),
             DeclareLaunchArgument("direct_velocity_scale", default_value="0.75"),
-            DeclareLaunchArgument("direct_time_parameterization", default_value="jerk_limited"),
-            DeclareLaunchArgument("direct_max_velocity", default_value="0.65"),
-            DeclareLaunchArgument("direct_max_acceleration", default_value="0.40"),
-            DeclareLaunchArgument("direct_max_jerk", default_value="2.00"),
+            DeclareLaunchArgument("direct_time_parameterization", default_value="ruckig"),
+            DeclareLaunchArgument("direct_max_velocity", default_value="0.85"),
+            DeclareLaunchArgument("direct_max_acceleration", default_value="0.60"),
+            DeclareLaunchArgument("direct_max_jerk", default_value="3.0"),
+            DeclareLaunchArgument("movel_grasp_lift_enabled", default_value="true"),
+            DeclareLaunchArgument("movel_cartesian_step_m", default_value="0.010"),
+            DeclareLaunchArgument("movel_max_position_error_m", default_value="0.020"),
+            DeclareLaunchArgument("movel_max_orientation_error_rad", default_value="0.15"),
             DeclareLaunchArgument("direct_min_segment_duration", default_value="0.12"),
             DeclareLaunchArgument("direct_max_duration_scale", default_value="2.50"),
             DeclareLaunchArgument("direct_joint_jump_warn_threshold", default_value="0.25"),
@@ -150,11 +153,19 @@ def generate_launch_description():
             DeclareLaunchArgument("precheck_ik_avoid_collisions", default_value="true"),
             DeclareLaunchArgument("precheck_ik_seed_from_pregrasp", default_value="true"),
             DeclareLaunchArgument("use_pregrasp_joint_goal", default_value="true"),
+            DeclareLaunchArgument("combined_task_trajectories", default_value="true"),
             DeclareLaunchArgument(
                 "pregrasp_transition_joint_positions",
                 default_value=(
-                    "1.2,0.5,0.15,-2.1,0.0,0.0,0.0,"
-                    "1.2,-0.5,0.15,-2.1,0.0,0.0,0.0"
+                    "1.2,0.5,0.15,-2.0,0.0,0.0,0.0,"
+                    "1.2,-0.5,0.15,-2.0,0.0,0.0,0.0"
+                ),
+            ),
+            DeclareLaunchArgument(
+                "pregrasp_middle_joint_positions",
+                default_value=(
+                    "0.175,0.475,-0.095,-1.460,-0.325,-0.215,0.095,"
+                    "0.175,-0.475,-0.095,-1.460,0.325,-0.215,0.095"
                 ),
             ),
             DeclareLaunchArgument(
@@ -189,7 +200,7 @@ def generate_launch_description():
             DeclareLaunchArgument("home_retry_wait_sec", default_value="0.5"),
             *_hand_launch_arguments(),
             DeclareLaunchArgument("both_pose_goal_mode", default_value="cartesian_direct"),
-            DeclareLaunchArgument("cartesian_waypoint_count", default_value="5"),
+            DeclareLaunchArgument("cartesian_waypoint_count", default_value="10"),
             DeclareLaunchArgument("ik_avoid_collisions", default_value="true"),
             DeclareLaunchArgument("arm_kp", default_value="60.0"),
             DeclareLaunchArgument("arm_kd", default_value="4.0"),
@@ -245,16 +256,12 @@ def generate_launch_description():
                 _package_launch("qi_robot_moveit_config", "static_virtual_joint_tfs.launch.py")
             ),
             IncludeLaunchDescription(_package_launch("qi_robot_moveit_config", "rsp.launch.py")),
-            IncludeLaunchDescription(
-                _package_launch("qi_robot_moveit_config", "move_group.launch.py"),
-                launch_arguments={"ik_backend": LaunchConfiguration("ik_backend")}.items(),
-            ),
+            IncludeLaunchDescription(_package_launch("qi_robot_moveit_config", "move_group.launch.py")),
             TimerAction(
                 period=LaunchConfiguration("rviz_delay"),
                 actions=[
                     IncludeLaunchDescription(
-                        _package_launch("qi_robot_moveit_config", "moveit_rviz.launch.py"),
-                        launch_arguments={"ik_backend": LaunchConfiguration("ik_backend")}.items(),
+                        _package_launch("qi_robot_moveit_config", "moveit_rviz.launch.py")
                     )
                 ],
                 condition=IfCondition(LaunchConfiguration("use_rviz")),
@@ -317,6 +324,10 @@ def generate_launch_description():
                     "direct_max_velocity": LaunchConfiguration("direct_max_velocity"),
                     "direct_max_acceleration": LaunchConfiguration("direct_max_acceleration"),
                     "direct_max_jerk": LaunchConfiguration("direct_max_jerk"),
+                    "movel_grasp_lift_enabled": LaunchConfiguration("movel_grasp_lift_enabled"),
+                    "movel_cartesian_step_m": LaunchConfiguration("movel_cartesian_step_m"),
+                    "movel_max_position_error_m": LaunchConfiguration("movel_max_position_error_m"),
+                    "movel_max_orientation_error_rad": LaunchConfiguration("movel_max_orientation_error_rad"),
                     "direct_min_segment_duration": LaunchConfiguration("direct_min_segment_duration"),
                     "direct_max_duration_scale": LaunchConfiguration("direct_max_duration_scale"),
                     "direct_joint_jump_warn_threshold": LaunchConfiguration("direct_joint_jump_warn_threshold"),
@@ -400,8 +411,14 @@ def generate_launch_description():
                         "use_pregrasp_joint_goal": ParameterValue(
                             LaunchConfiguration("use_pregrasp_joint_goal"), value_type=bool
                         ),
+                        "combined_task_trajectories": ParameterValue(
+                            LaunchConfiguration("combined_task_trajectories"), value_type=bool
+                        ),
                         "pregrasp_transition_joint_positions": LaunchConfiguration(
                             "pregrasp_transition_joint_positions"
+                        ),
+                        "pregrasp_middle_joint_positions": LaunchConfiguration(
+                            "pregrasp_middle_joint_positions"
                         ),
                         "pregrasp_joint_positions": LaunchConfiguration("pregrasp_joint_positions"),
                         "home_joint_positions": LaunchConfiguration("home_joint_positions"),

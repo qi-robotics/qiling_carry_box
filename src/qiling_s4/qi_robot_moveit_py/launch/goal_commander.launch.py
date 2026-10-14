@@ -96,6 +96,10 @@ def generate_launch_description():
             DeclareLaunchArgument("direct_max_velocity", default_value="0.45"),
             DeclareLaunchArgument("direct_max_acceleration", default_value="0.80"),
             DeclareLaunchArgument("direct_max_jerk", default_value="2.50"),
+            DeclareLaunchArgument("movel_grasp_lift_enabled", default_value="true"),
+            DeclareLaunchArgument("movel_cartesian_step_m", default_value="0.010"),
+            DeclareLaunchArgument("movel_max_position_error_m", default_value="0.020"),
+            DeclareLaunchArgument("movel_max_orientation_error_rad", default_value="0.15"),
             DeclareLaunchArgument("direct_min_segment_duration", default_value="0.12"),
             DeclareLaunchArgument("direct_max_duration_scale", default_value="1.50"),
             DeclareLaunchArgument("direct_joint_jump_warn_threshold", default_value="0.25"),
@@ -212,6 +216,18 @@ def generate_launch_description():
                         ),
                         "direct_max_jerk": ParameterValue(
                             LaunchConfiguration("direct_max_jerk"), value_type=float
+                        ),
+                        "movel_grasp_lift_enabled": ParameterValue(
+                            LaunchConfiguration("movel_grasp_lift_enabled"), value_type=bool
+                        ),
+                        "movel_cartesian_step_m": ParameterValue(
+                            LaunchConfiguration("movel_cartesian_step_m"), value_type=float
+                        ),
+                        "movel_max_position_error_m": ParameterValue(
+                            LaunchConfiguration("movel_max_position_error_m"), value_type=float
+                        ),
+                        "movel_max_orientation_error_rad": ParameterValue(
+                            LaunchConfiguration("movel_max_orientation_error_rad"), value_type=float
                         ),
                         "direct_min_segment_duration": ParameterValue(
                             LaunchConfiguration("direct_min_segment_duration"), value_type=float

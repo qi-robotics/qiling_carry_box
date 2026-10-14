@@ -39,8 +39,20 @@ ros2 launch qi_robot_moveit_config external_sim_arm_stack.launch.py publish_fake
 - `launch/goal_commander.launch.py`
 - `qi_robot_moveit_py/moveit_goal_commander.py`
 
-两个顶层入口当前均使用 `direct_time_parameterization=jerk_limited`，并将
-`object_cartesian_waypoint_count` 设为 `5`。
+真机入口的关节过渡及放置路径使用 Python `ruckig==0.9.2`。
+缓存抓取和缓存上抬默认使用 MoveL 风格的连续直线路径：沿末端直线按 `movel_cartesian_step_m`
+采样 IK，对整条线统一生成时间曲线，并在发送前检查正运动学路径偏差。
+`movel_grasp_lift_enabled:=false` 可切回原先逐段 Ruckig 执行。外部仿真入口仍使用 `jerk_limited`。
+真机下降和前推仍分别按 `object_cartesian_waypoint_count` 取点，默认 10 个。
+真机工作区编译前，运行用户需安装 Python 包：
+
+```bash
+python3 -m pip install --user ruckig==0.9.2
+```
+
+真机抓取阶段将当前状态、过渡关节点、新增中间关节点、预抓取点和连续抓取直线
+合为一条轨迹。到抓取点后闭手并等待，随后单独执行缓存上抬直线并等待 `place`。
+收到 `place` 后，缓存下降和闭手前推合为一条轨迹，再张手并沿 home 过渡点回 home。
 
 ## 对外接口
 
@@ -66,8 +78,8 @@ FK，冻结左右末端的实际姿态和相对中点偏移，再将两末端同
 
 为避免抓取到位后才发现后续路径无解，完整的上抬、下降和放置后前推 waypoint IK
 会在过渡点动作前预计算并分段缓存。任一 waypoint 无解或关节跳变超限，流程会在
-机械臂开始动作前报错退出。真机和外部仿真收到 `place` 后均依次执行缓存下降、保持闭手沿
-`base_link` x 正方向前推 0.10 m、张手、home 过渡点和 home。
+机械臂开始动作前报错退出。真机收到 `place` 后执行合并的缓存下降和闭手前推，
+再张手、沿 home 过渡点回 home；外部仿真仍逐段执行。
 
 两个顶层入口的下降缓存起点、前推缓存起点和前推终点关节容差分别为 `0.10`、`0.05`、
 `0.05 rad`。下降和前推会从当前关节状态平滑接入缓存首点。放置指令只有在缓存上抬

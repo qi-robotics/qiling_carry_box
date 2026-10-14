@@ -1,7 +1,0 @@
-<library path="qi_robot_pinocchio_ik">
-  <class name="qi_robot_pinocchio_ik/PinocchioIKPlugin"
-         type="qi_robot_pinocchio_ik::PinocchioIKPlugin"
-         base_class_type="kinematics::KinematicsBase">
-    <description>Bounded damped-Levenberg--Marquardt IK using Pinocchio FK and Jacobians.</description>
-  </class>
-</library>
