@@ -62,6 +62,8 @@ std_msgs/msg/String
 收到抓取指令时重置为 `false`，上抬成功等待放置时变为 `grasp success`；
 收到放置指令时重置为 `false`，完成下降、前推、张手和第一组 home 过渡姿态后，
 第二组 home 过渡关节目标被控制服务接受、开始执行时变为 `place success`。
+为了保留这个发布时间点，place 回 home 时逐个发送过渡点目标；即使
+`combined_task_trajectories=true`，也不会将这段 home 路径合并成单条目标。
 抓取和放置复用同一个 topic。
 
 ```bash
@@ -345,10 +347,9 @@ sudo systemctl enable robot_stack_monitor
 
 - 工作目录 / ExecStart 指向 `qiling_carry_box`
 - `ROS_DOMAIN_ID=22`
-- `CYCLONEDDS_URI` 默认使用  
-  `file:///home/coral/qi_deploy_igh_release/config/dds/cyclonedds_enp8s0.xml`  
-  （旧路径 `/home/coral/dds/cyclonedds.xml` 在本机不存在）
-- 若配置文件缺失，`monitor_robot_stack.sh` 会按 SDK 网口自动回退到交付包 / SDK 的 xml
+- `CYCLONEDDS_URI` 使用旧 `qiling_s4` 服务的
+  `/home/coral/dds/cyclonedds.xml`（本机 `enp6s0`，与 SDK 配置一致）
+- 若配置文件缺失，`monitor_robot_stack.sh` 会尝试交付包、SDK 和本机的备用 XML
 
 ### 管理命令
 

@@ -1278,11 +1278,11 @@ class VisionGraspSequence(Node):
             return False
 
         if self._should_release_attached_object():
-            self.get_logger().info("灵巧手张开完成，关闭 MuJoCo 吸附。")
+            self.get_logger().info("灵巧手张开指令已发送，关闭 MuJoCo 吸附（未验证手指到位）。")
             if not self._set_object_attach(False):
                 return False
         else:
-            self.get_logger().info("灵巧手张开完成，当前未启用 MuJoCo 吸附，跳过吸附关闭。")
+            self.get_logger().info("灵巧手张开指令已发送，当前未启用 MuJoCo 吸附，跳过吸附关闭（未验证手指到位）。")
 
         self.get_logger().info("开始依次返回 home 过渡点和 home 点。")
         self._publish_status("place", "motion", "info", "开始回home")
@@ -1291,7 +1291,7 @@ class VisionGraspSequence(Node):
             self._publish_status("place", "motion", "ok", "回home完成")
             self.get_logger().info("双臂已回 home，追加发送灵巧手张开命令。")
             self._publish_status("hand", "command", "info", "回home后再次张开灵巧手")
-            if not self._send_hands_command(grasp=False):
+            if not self._send_hands_command(grasp=False, force_right_resend=True):
                 return False
         else:
             self._publish_status("place", "motion", "fail", "回home失败")
@@ -1311,7 +1311,9 @@ class VisionGraspSequence(Node):
         publish_place_success_on_second_transition_start: bool = False,
     ) -> bool:
         max_attempts = max(1, self.home_retry_count + 1)
-        if self.combined_task_trajectories:
+        # place success must retain the old timing: after transition 1 finishes,
+        # when the separate transition 2 goal is accepted by the arm service.
+        if self.combined_task_trajectories and not publish_place_success_on_second_transition_start:
             for attempt in range(1, max_attempts + 1):
                 label = "双臂回 home" if attempt == 1 else f"双臂回 home 重试 {attempt - 1}"
                 if self._send_both_arm_joint_goal(
@@ -1319,8 +1321,6 @@ class VisionGraspSequence(Node):
                     label,
                     joint_waypoints=self.home_transition_joint_waypoints,
                 ):
-                    if publish_place_success_on_second_transition_start:
-                        self._publish_grasp_result("place success")
                     return True
                 if attempt < max_attempts:
                     end_time = time.monotonic() + self.home_retry_wait_sec
@@ -1864,7 +1864,7 @@ class VisionGraspSequence(Node):
         command.timestamp = int(self.get_clock().now().nanoseconds)
         self.hands_cmd_pub.publish(command)
 
-    def _send_hands_command(self, *, grasp: bool) -> bool:
+    def _send_hands_command(self, *, grasp: bool, force_right_resend: bool = False) -> bool:
         if not self.enable_hand_control:
             self.get_logger().info("enable_hand_control=false，跳过灵巧手控制。")
             return True
@@ -1889,6 +1889,17 @@ class VisionGraspSequence(Node):
         else:
             left_durations = self.left_hand_release_durations
             right_durations = self.right_hand_release_durations
+            if force_right_resend:
+                # The SDK deduplicates each hand by positions + durations. A second
+                # identical release after home would not reach the right-hand CAN bus.
+                right_durations = [
+                    duration + 1 if duration < 65535 else duration - 1
+                    for duration in right_durations
+                ]
+                self.get_logger().info(
+                    "回 home 后右手张开使用微调 duration 重新下发，"
+                    f"原值={self.right_hand_release_durations}，本次={right_durations}。"
+                )
             wait_sec = self.hand_release_wait_sec
             action = "张开"
             step1_left = self.left_hand_release_positions
@@ -1931,7 +1942,7 @@ class VisionGraspSequence(Node):
         final_left = step2_left if step2_left is not None else step1_left
         final_right = step2_right if step2_right is not None else step1_right
         self._publish_status("hand", "command", "ok",
-                             f"灵巧手{action}完成 left={final_left} right={final_right}")
+                             f"灵巧手{action}指令已发送（未验证到位） left={final_left} right={final_right}")
         return True
 
     def _parse_optional_float_list_parameter(self, parameter_name: str, expected_size: int) -> list[float]:

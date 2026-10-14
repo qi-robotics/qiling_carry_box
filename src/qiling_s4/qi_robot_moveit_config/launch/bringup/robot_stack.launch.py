@@ -126,7 +126,7 @@ def generate_launch_description():
             DeclareLaunchArgument("visual_x_min", default_value="0.43"),
             DeclareLaunchArgument("visual_x_max", default_value="0.48"),
             DeclareLaunchArgument("visual_fixed_y", default_value="0.0"),
-            DeclareLaunchArgument("visual_fixed_z", default_value="0.02"),
+            DeclareLaunchArgument("visual_fixed_z", default_value="0.055"),
             DeclareLaunchArgument("joint_state_topic", default_value="/joint_states"),
             # The installed SDK subscribes to rt/lowcmd and merges mode_ctrl=5 arms with policy legs.
             DeclareLaunchArgument(

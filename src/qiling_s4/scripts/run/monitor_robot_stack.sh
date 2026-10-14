@@ -105,7 +105,7 @@ resolve_cyclonedds_uri() {
             fi
             return 0
         fi
-        log "!!! WARNING: 配置的 CYCLONEDDS_URI 不可用: $configured"
+        log "!!! WARNING: 配置的 CYCLONEDDS_URI 不可用: $configured" >&2
     fi
 
     iface="$(resolve_dds_network_interface)"
@@ -115,6 +115,8 @@ resolve_cyclonedds_uri() {
         "${QI_DEPLOY_DDS_DIR}/.cyclonedds_runtime.xml" \
         "${QI_SDK_DDS_DIR}/ql_cyclonedds_uri.xml" \
         "${QI_SDK_DDS_DIR}/qi_cyclonedds_uri.xml" \
+        "/home/coral/dds/cyclonedds.xml" \
+        "/home/coral/project/qi_sdk_internal/install/config/dds/qi_cyclonedds_uri.xml" \
         "${PROJECT_DIR}/src/qiling_s4/qi_ros2/cyclonedds_ws/src/cyclonedds.xml"
     do
         if [[ -r "$candidate" ]]; then
