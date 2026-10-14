@@ -15,8 +15,8 @@ Group=coral
 WorkingDirectory=/home/coral/project/qiling_carry_box
 
 Environment="RMW_IMPLEMENTATION=rmw_cyclonedds_cpp"
-# 与机载 SDK config/dds/dds_config.yaml domain_id 保持一致（当前为 21）
-Environment="ROS_DOMAIN_ID=21"
+# 当前 robot_stack 使用 ROS domain 22
+Environment="ROS_DOMAIN_ID=22"
 # 与 qi_deploy 真机网口一致；若文件不存在，monitor 脚本会按 SDK/交付包自动回退
 Environment="CYCLONEDDS_URI=file:///home/coral/qi_deploy_igh_release/config/dds/cyclonedds_enp8s0.xml"
 

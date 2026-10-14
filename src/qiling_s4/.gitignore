@@ -1,7 +1,7 @@
 # colcon / ROS 2（仅忽略工作区根目录产物，避免误伤 scripts/compile 等源码脚本）
-/build/
-/install/
-/log/
+build
+install
+log
 .roslog/
 /qi_sdk_install/
 # IDE / editor

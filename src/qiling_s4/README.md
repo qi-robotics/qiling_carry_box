@@ -337,14 +337,14 @@ sudo cp /home/coral/project/qiling_carry_box/src/qiling_s4/scripts/run/robot_sta
 # 重载 systemd 配置
 sudo systemctl daemon-reload
 
-# 开机自启 + 立即启动
-sudo systemctl enable --now robot_stack_monitor
+# 设置开机自启
+sudo systemctl enable robot_stack_monitor
 ```
 
 说明：
 
 - 工作目录 / ExecStart 指向 `qiling_carry_box`
-- `ROS_DOMAIN_ID=21`（与 SDK `dds_config.yaml` 一致）
+- `ROS_DOMAIN_ID=22`
 - `CYCLONEDDS_URI` 默认使用  
   `file:///home/coral/qi_deploy_igh_release/config/dds/cyclonedds_enp8s0.xml`  
   （旧路径 `/home/coral/dds/cyclonedds.xml` 在本机不存在）

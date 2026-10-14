@@ -20,8 +20,8 @@ set -Eeuo pipefail
 
 # ---------- ROS / DDS 环境 ----------
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
-# 默认与机载 SDK dds_config.yaml domain_id 一致；可由 service Environment 覆盖
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-21}"
+# 默认使用 ROS domain 22；可由 service Environment 覆盖
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-22}"
 
 # ---------- 路径（相对本脚本，避免项目目录改名后写死路径失效）----------
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
