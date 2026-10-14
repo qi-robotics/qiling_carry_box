@@ -58,6 +58,37 @@ class JointLine:
         return position, derivative, second, third
 
 
+def smooth_joint_waypoints(
+    positions: Sequence[Sequence[float]], *, weight: float, max_joint_deviation: float
+) -> np.ndarray:
+    """Reduce per-joint curvature while keeping endpoints and bounding IK changes.
+
+    The returned points are only candidates. The caller must validate their FK,
+    limits and collisions before using them on a robot.
+    """
+    points = np.asarray(positions, dtype=float)
+    if points.ndim != 2 or len(points) < 3 or not np.isfinite(points).all():
+        raise ValueError("MoveL smoothing requires at least three finite joint waypoints")
+    if not math.isfinite(weight) or weight < 0 or not math.isfinite(max_joint_deviation) or max_joint_deviation < 0:
+        raise ValueError("MoveL smoothing parameters must be finite and nonnegative")
+    if weight == 0 or max_joint_deviation == 0:
+        return points.copy()
+    count = len(points)
+    curvature = np.zeros((count - 2, count))
+    for index in range(count - 2):
+        curvature[index, index:index + 3] = (1.0, -2.0, 1.0)
+    system = np.eye(count) + weight * (curvature.T @ curvature)
+    system[0, :] = 0.0
+    system[0, 0] = 1.0
+    system[-1, :] = 0.0
+    system[-1, -1] = 1.0
+    smoothed = np.linalg.solve(system, points)
+    smoothed = np.clip(smoothed, points - max_joint_deviation, points + max_joint_deviation)
+    smoothed[0] = points[0]
+    smoothed[-1] = points[-1]
+    return smoothed
+
+
 def plan_joint_line(
     line: JointLine,
     *,
@@ -65,11 +96,14 @@ def plan_joint_line(
     max_acceleration: float,
     max_jerk: float,
     sample_period: float,
+    minimum_duration: float = 0.0,
 ) -> list[tuple[float, list[float], list[float], list[float]]]:
     """Use one quintic Cartesian progress law, stretched to joint limits."""
     limits = (max_velocity, max_acceleration, max_jerk, sample_period)
     if any(not math.isfinite(value) or value <= 0 for value in limits):
         raise ValueError("MoveL limits and sample period must be finite and positive")
+    if not math.isfinite(minimum_duration) or minimum_duration < 0:
+        raise ValueError("MoveL minimum duration must be finite and nonnegative")
 
     def state(u: float):
         s = 10 * u**3 - 15 * u**4 + 6 * u**5
@@ -89,6 +123,7 @@ def plan_joint_line(
         float(np.cbrt(peak[2] / max_jerk)),
         sample_period,
     ) * 1.02
+    duration = max(duration, minimum_duration)
     steps = max(1, math.ceil(duration / sample_period))
     samples = []
     for i in range(steps + 1):

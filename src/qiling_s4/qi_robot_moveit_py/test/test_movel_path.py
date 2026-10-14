@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from qi_robot_moveit_py.movel_path import JointLine, plan_joint_line
+from qi_robot_moveit_py.movel_path import JointLine, plan_joint_line, smooth_joint_waypoints
 
 
 def test_joint_line_has_continuous_position_velocity_and_acceleration():
@@ -51,3 +51,27 @@ def test_nonuniform_ik_samples_still_respect_jerk_limit():
         abs((b[3][joint] - a[3][joint]) / (b[0] - a[0]))
         for a, b in zip(samples, samples[1:]) for joint in range(2)
     ) <= 3.0
+
+
+def test_smoothing_removes_local_pause_without_moving_endpoints():
+    original = np.array([[0.0], [-0.01], [-0.05], [-0.11], [-0.11], [-0.12], [-0.14]])
+    smoothed = smooth_joint_waypoints(original, weight=10.0, max_joint_deviation=0.03)
+    assert np.array_equal(smoothed[[0, -1]], original[[0, -1]])
+    assert np.max(np.abs(smoothed - original)) <= 0.03 + 1e-12
+    assert smoothed[4, 0] < smoothed[3, 0]
+    progress = np.linspace(0, 1, len(original))
+    params = dict(max_velocity=0.85, max_acceleration=0.60, max_jerk=3.0, sample_period=0.02)
+    before = plan_joint_line(JointLine(progress, original), **params)
+    after = plan_joint_line(JointLine(progress, smoothed), **params)
+    assert after[-1][0] < before[-1][0]
+
+
+def test_minimum_duration_resamples_at_requested_period():
+    line = JointLine([0.0, 0.5, 1.0], [[0.0], [0.1], [0.2]])
+    params = dict(max_velocity=0.85, max_acceleration=0.60, max_jerk=3.0, sample_period=0.02)
+    original = plan_joint_line(line, **params)
+    minimum = original[-1][0] * 1.5
+    limited = plan_joint_line(line, minimum_duration=minimum, **params)
+    assert limited[-1][0] == pytest.approx(minimum)
+    assert max(b[0] - a[0] for a, b in zip(limited, limited[1:])) <= 0.020001
+    assert max(abs(row[2][0]) for row in limited) < max(abs(row[2][0]) for row in original)

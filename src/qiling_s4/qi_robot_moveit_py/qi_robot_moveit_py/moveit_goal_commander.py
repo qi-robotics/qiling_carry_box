@@ -1,7 +1,7 @@
 import json
 import math
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 
 import numpy as np
 import rclpy
@@ -25,7 +25,7 @@ from moveit_msgs.msg import (
     PositionConstraint,
     RobotState,
 )
-from moveit_msgs.srv import GetMotionPlan, GetPositionIK
+from moveit_msgs.srv import GetMotionPlan, GetPositionIK, GetStateValidity
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
@@ -39,7 +39,9 @@ from urdf_parser_py.urdf import URDF
 from visualization_msgs.msg import Marker, MarkerArray
 
 from qi_robot_moveit_py.joint_state_safety import JointStateFrameGuard
-from qi_robot_moveit_py.movel_path import JointLine, plan_joint_line
+from qi_robot_moveit_py.movel_path import (
+    JointLine, plan_joint_line, smooth_joint_waypoints,
+)
 from qi_robot_moveit_py.ruckig_path import plan_joint_path
 
 
@@ -132,6 +134,12 @@ class MoveItGoalCommander(Node):
         self.declare_parameter("movel_cartesian_step_m", 0.010)
         self.declare_parameter("movel_max_position_error_m", 0.020)
         self.declare_parameter("movel_max_orientation_error_rad", 0.15)
+        self.declare_parameter("movel_smoothing_enabled", False)
+        self.declare_parameter("movel_smoothing_weight", 10.0)
+        self.declare_parameter("movel_smoothing_max_joint_deviation", 0.03)
+        self.declare_parameter("movel_max_speedup", 1.25)
+        self.declare_parameter("movel_grasp_max_speedup", 1.25)
+        self.declare_parameter("movel_state_validity_service", "/check_state_validity")
         self.declare_parameter("direct_min_segment_duration", 0.12)
         self.declare_parameter("direct_max_duration_scale", 1.50)
         self.declare_parameter("direct_joint_jump_warn_threshold", 0.25)
@@ -205,6 +213,7 @@ class MoveItGoalCommander(Node):
         self._cached_object_push_pending_place = False
         self._cached_named_trajectories: Dict[str, List[List[float]]] = {}
         self._cached_movel_samples: Dict[str, List[tuple[float, list[float], list[float], list[float]]]] = {}
+        self._verified_movel_segments: set[str] = set()
         self._cached_named_place_trajectories: Dict[str, List[List[float]]] = {}
         self._cached_named_push_trajectories: Dict[str, List[List[float]]] = {}
         self._planning_sequence = 0
@@ -259,6 +268,9 @@ class MoveItGoalCommander(Node):
         )
         self._plan_kinematic_path = self.create_client(
             GetMotionPlan, str(self.get_parameter("plan_kinematic_path_service").value)
+        )
+        self._movel_state_validity = self.create_client(
+            GetStateValidity, str(self.get_parameter("movel_state_validity_service").value)
         )
         self._trajectory_controllers = {
             arm_name: ActionClient(self, FollowJointTrajectory, arm.控制器_action)
@@ -2240,7 +2252,9 @@ class MoveItGoalCommander(Node):
         cache_key: str = "lift_place",
     ) -> None:
         if plan_only and cache_key == "lift_place":
-            self._cached_movel_samples.pop(cache_key, None)
+            for segment_key in (cache_key, "place", "push"):
+                self._cached_movel_samples.pop(segment_key, None)
+                self._verified_movel_segments.discard(segment_key)
             self._cached_named_trajectories.pop(cache_key, None)
         if not self._compute_ik.wait_for_service(timeout_sec=self._moveit_service_wait_sec):
             self.get_logger().error("MoveIt /compute_ik 服务不可用，无法预规划箱体放置路径。")
@@ -2330,7 +2344,9 @@ class MoveItGoalCommander(Node):
         cache_key: str = "lift_place",
     ) -> None:
         if plan_only and cache_key == "lift_place":
-            self._cached_movel_samples.pop(cache_key, None)
+            for segment_key in (cache_key, "place", "push"):
+                self._cached_movel_samples.pop(segment_key, None)
+                self._verified_movel_segments.discard(segment_key)
             self._cached_named_trajectories.pop(cache_key, None)
         if not self._compute_ik.wait_for_service(timeout_sec=self._moveit_service_wait_sec):
             raise ValueError("MoveIt /compute_ik 服务不可用，无法规划关节抓取后的上抬/下降。")
@@ -2457,32 +2473,47 @@ class MoveItGoalCommander(Node):
         if plan.get("plan_only"):
             cache_key = str(plan.get("cache_key") or "lift_place")
             if cache_key == "lift_place" and self._movel_enabled():
+                def plan_push() -> None:
+                    if push_positions:
+                        try:
+                            self._cache_movel_line(
+                                "push", plan, [list(point) for point in positions[place_end:]],
+                                push_steps, on_ready=finish_all,
+                                waypoint_start_index=place_end,
+                            )
+                        except ValueError as exc:
+                            self.get_logger().warn(f"前推 MoveL 预规划未通过，沿用原始 Ruckig：{exc}")
+                            finish_all()
+                    else:
+                        finish_all()
+
+                def plan_place() -> None:
+                    try:
+                        self._cache_movel_line(
+                            "place", plan, [list(point) for point in positions[lift_steps:place_end]],
+                            place_end - lift_steps, on_ready=plan_push,
+                            waypoint_start_index=lift_steps,
+                        )
+                    except ValueError as exc:
+                        self.get_logger().warn(f"下降 MoveL 预规划未通过，沿用原始 Ruckig：{exc}")
+                        plan_push()
+
+                def finish_all() -> None:
+                    self._finish_lift_place_cache(
+                        cache_key, lift_positions, place_positions, push_positions
+                    )
+
                 try:
-                    self._cache_movel_line(cache_key, plan, lift_positions, lift_steps)
+                    self._cache_movel_line(
+                        cache_key, plan, lift_positions, lift_steps,
+                        on_ready=plan_place,
+                    )
                 except ValueError as exc:
                     self._moveit_busy = False
                     self.get_logger().error(f"箱体上抬 MoveL 预规划失败：{exc}")
                     self._publish_status(f"both_arms 失败：上抬 MoveL {exc}", "both_arms")
-                    return
-            self._cached_named_trajectories[cache_key] = lift_positions
-            self._cached_named_place_trajectories[cache_key] = place_positions
-            if push_positions:
-                self._cached_named_push_trajectories[cache_key] = push_positions
-            else:
-                self._cached_named_push_trajectories.pop(cache_key, None)
-            self._cached_object_place_positions = place_positions
-            self._cached_object_place_ready = False
-            self._cached_object_place_pending_lift = False
-            self._cached_object_push_positions = push_positions or None
-            self._cached_object_push_ready = False
-            self._cached_object_push_pending_place = False
-            self._moveit_busy = False
-            self.get_logger().info(
-                f"箱体上抬/下降 waypoint IK 全部成功，已缓存上抬 cache_key={cache_key}, "
-                f"lift_points={len(lift_positions)}，下降 place_points={len(place_positions)}，"
-                f"放置后前推 push_points={len(push_positions)}。"
-            )
-            self._publish_status(f"both_arms 预规划成功：{cache_key}", "both_arms")
+                return
+            self._finish_lift_place_cache(cache_key, lift_positions, place_positions, push_positions)
             return
 
         self._cached_object_place_positions = place_positions
@@ -2500,6 +2531,30 @@ class MoveItGoalCommander(Node):
             lift_positions,
             result_label="双臂缓存上抬",
         )
+
+    def _finish_lift_place_cache(
+        self, cache_key: str, lift_positions: List[List[float]],
+        place_positions: List[List[float]], push_positions: List[List[float]],
+    ) -> None:
+        self._cached_named_trajectories[cache_key] = lift_positions
+        self._cached_named_place_trajectories[cache_key] = place_positions
+        if push_positions:
+            self._cached_named_push_trajectories[cache_key] = push_positions
+        else:
+            self._cached_named_push_trajectories.pop(cache_key, None)
+        self._cached_object_place_positions = place_positions
+        self._cached_object_place_ready = False
+        self._cached_object_place_pending_lift = False
+        self._cached_object_push_positions = push_positions or None
+        self._cached_object_push_ready = False
+        self._cached_object_push_pending_place = False
+        self._moveit_busy = False
+        self.get_logger().info(
+            f"箱体上抬/下降 waypoint IK 全部成功，已缓存上抬 cache_key={cache_key}, "
+            f"lift_points={len(lift_positions)}，下降 place_points={len(place_positions)}，"
+            f"放置后前推 push_points={len(push_positions)}。"
+        )
+        self._publish_status(f"both_arms 预规划成功：{cache_key}", "both_arms")
 
     def _object_plan_seed(self) -> Dict[str, float]:
         grasp = self._cached_named_trajectories.get("grasp")
@@ -2564,83 +2619,225 @@ class MoveItGoalCommander(Node):
             for axis in ("x", "y", "z")
         ))
 
-    def _cache_movel_line(self, key: str, plan: dict, positions: List[List[float]], count: int) -> None:
+    def _cache_movel_line(
+        self, key: str, plan: dict, positions: List[List[float]], count: int,
+        on_ready: Callable[[], None], waypoint_start_index: int = 0,
+    ) -> None:
         arm = self.arms["both_arms"]
-        seed = plan["initial_seed"]
-        start = [float(seed[name]) for name in arm.关节名]
-        left = [plan["left_start"]] + plan["left_waypoints"][:count]
-        right = [plan["right_start"]] + plan["right_waypoints"][:count]
+        if len(positions) != count or count < 1:
+            raise ValueError("MoveL 路点数量与规划段不一致")
+        if waypoint_start_index == 0:
+            seed = plan["initial_seed"]
+            start = [float(seed[name]) for name in arm.关节名]
+            left_start = plan["left_start"]
+            right_start = plan["right_start"]
+        else:
+            previous = waypoint_start_index - 1
+            start = list(plan["left_solutions"][previous]) + list(plan["right_solutions"][previous])
+            left_start = plan["left_waypoints"][previous]
+            right_start = plan["right_waypoints"][previous]
+        left = [left_start] + plan["left_waypoints"][waypoint_start_index:waypoint_start_index + count]
+        right = [right_start] + plan["right_waypoints"][waypoint_start_index:waypoint_start_index + count]
         distances = [self._pose_distance(a, b) for a, b in zip(left[:-1], left[1:])]
         total = sum(distances)
         if total < 1e-5:
             raise ValueError("笛卡尔直线长度过短")
         progress = np.cumsum([0.0] + distances) / total
-        line = JointLine(progress, [start] + positions)
+        raw_positions = [start] + positions
+        line = JointLine(progress, raw_positions)
 
         max_pos = float(self.get_parameter("movel_max_position_error_m").value)
         max_angle = float(self.get_parameter("movel_max_orientation_error_rad").value)
         if max_pos <= 0 or max_angle <= 0:
             raise ValueError("MoveL 路径误差阈值必须大于零")
-        worst_pos = worst_angle = 0.0
-        for s in np.linspace(0.0, 1.0, max(2, 4 * count + 1)):
-            q, _, _, _ = line.at(float(s))
-            joint_map = dict(zip(arm.关节名, q))
-            if self._robot_model is not None:
-                for joint_name, value in joint_map.items():
-                    joint = self._robot_model.joint_map.get(joint_name)
-                    limit = joint.limit if joint is not None else None
-                    if limit is not None and limit.lower is not None and limit.upper is not None and (
-                        value < float(limit.lower) - 1e-6 or value > float(limit.upper) + 1e-6
-                    ):
-                        raise ValueError(f"{joint_name} 在路径 {float(s):.2f} 处超出 URDF 关节限位")
-            for name, endpoints in (("left_arm", left), ("right_arm", right)):
-                actual = self._compute_tool_pose_from_positions(name, joint_map)
-                if actual is None or not self._fk_chains.get(name):
-                    raise ValueError(f"{name} 正运动学不可用，无法检查 MoveL 路径")
-                expected_start, expected_end = endpoints[0], endpoints[-1]
-                expected = PoseStamped()
-                for axis in ("x", "y", "z"):
-                    setattr(expected.pose.position, axis, self._lerp(
-                        getattr(expected_start.pose.position, axis),
-                        getattr(expected_end.pose.position, axis), float(s),
-                    ))
-                qa = self._quat_tuple(expected_start.pose.orientation)
-                qb = self._quat_tuple(expected_end.pose.orientation)
-                expected_q = self._slerp(qa, qb, float(s))
-                actual_q = self._quat_tuple(actual.pose.orientation)
-                angle = 2 * math.acos(min(1.0, abs(sum(a * b for a, b in zip(expected_q, actual_q)))))
-                error = self._pose_distance(expected, actual)
-                worst_pos = max(worst_pos, error)
-                worst_angle = max(worst_angle, angle)
-                if error > max_pos or angle > max_angle:
-                    raise ValueError(
-                        f"{name} 在路径 {float(s):.2f} 处偏离直线："
-                        f"位置 {error:.3f}m / {max_pos:.3f}m，姿态 {angle:.3f}rad / {max_angle:.3f}rad"
-                    )
-        samples = plan_joint_line(
-            line,
+        def evaluate(candidate: JointLine):
+            worst_pos = worst_angle = 0.0
+            for s in np.linspace(0.0, 1.0, max(2, 4 * count + 1)):
+                q, _, _, _ = candidate.at(float(s))
+                joint_map = dict(zip(arm.关节名, q))
+                if self._robot_model is not None:
+                    for joint_name, value in joint_map.items():
+                        joint = self._robot_model.joint_map.get(joint_name)
+                        limit = joint.limit if joint is not None else None
+                        if limit is not None and limit.lower is not None and limit.upper is not None and (
+                            value < float(limit.lower) - 1e-6 or value > float(limit.upper) + 1e-6
+                        ):
+                            raise ValueError(f"{joint_name} 在路径 {float(s):.2f} 处超出 URDF 关节限位")
+                for name, endpoints in (("left_arm", left), ("right_arm", right)):
+                    actual = self._compute_tool_pose_from_positions(name, joint_map)
+                    if actual is None or not self._fk_chains.get(name):
+                        raise ValueError(f"{name} 正运动学不可用，无法检查 MoveL 路径")
+                    expected_start, expected_end = endpoints[0], endpoints[-1]
+                    expected = PoseStamped()
+                    for axis in ("x", "y", "z"):
+                        setattr(expected.pose.position, axis, self._lerp(
+                            getattr(expected_start.pose.position, axis),
+                            getattr(expected_end.pose.position, axis), float(s),
+                        ))
+                    qa = self._quat_tuple(expected_start.pose.orientation)
+                    qb = self._quat_tuple(expected_end.pose.orientation)
+                    expected_q = self._slerp(qa, qb, float(s))
+                    actual_q = self._quat_tuple(actual.pose.orientation)
+                    angle = 2 * math.acos(min(1.0, abs(sum(a * b for a, b in zip(expected_q, actual_q)))))
+                    error = self._pose_distance(expected, actual)
+                    worst_pos = max(worst_pos, error)
+                    worst_angle = max(worst_angle, angle)
+                    if error > max_pos or angle > max_angle:
+                        raise ValueError(
+                            f"{name} 在路径 {float(s):.2f} 处偏离直线："
+                            f"位置 {error:.3f}m / {max_pos:.3f}m，姿态 {angle:.3f}rad / {max_angle:.3f}rad"
+                        )
+            samples = plan_joint_line(
+                candidate,
+                max_velocity=float(self.get_parameter("direct_max_velocity").value),
+                max_acceleration=float(self.get_parameter("direct_max_acceleration").value),
+                max_jerk=float(self.get_parameter("direct_max_jerk").value),
+                sample_period=float(self.get_parameter("direct_sample_period").value),
+            )
+            return samples, worst_pos, worst_angle
+
+        original_samples, original_pos_error, original_angle_error = evaluate(line)
+
+        def finish(samples, pos_error, angle_error, description, *, collision_verified=False):
+            self._cached_movel_samples[key] = samples
+            if collision_verified:
+                self._verified_movel_segments.add(key)
+            else:
+                self._verified_movel_segments.discard(key)
+            self.get_logger().info(
+                f"{key} MoveL 已缓存（{description}）：IK 点={len(positions)}, 轨迹点={len(samples)}, "
+                f"时长={samples[-1][0]:.3f}s, 最大路径偏差={pos_error:.4f}m/{angle_error:.3f}rad。"
+            )
+            on_ready()
+
+        if not bool(self.get_parameter("movel_smoothing_enabled").value):
+            finish(original_samples, original_pos_error, original_angle_error, "原始路点")
+            return
+        try:
+            optimized = smooth_joint_waypoints(
+                raw_positions,
+                weight=float(self.get_parameter("movel_smoothing_weight").value),
+                max_joint_deviation=float(self.get_parameter("movel_smoothing_max_joint_deviation").value),
+            )
+            candidate_line = JointLine(progress, optimized)
+            candidate_samples, candidate_pos_error, candidate_angle_error = evaluate(candidate_line)
+            if candidate_samples[-1][0] >= original_samples[-1][0] * 0.98:
+                raise ValueError("平滑后的轨迹没有有效缩短")
+            speedup_parameter = "movel_grasp_max_speedup" if key == "grasp" else "movel_max_speedup"
+            max_speedup = float(self.get_parameter(speedup_parameter).value)
+            if not math.isfinite(max_speedup) or max_speedup < 1.0:
+                raise ValueError(f"{speedup_parameter} 必须不小于 1")
+        except (ValueError, np.linalg.LinAlgError) as exc:
+            self.get_logger().warn(f"{key} MoveL 平滑候选未通过本地检查，沿用原始路点：{exc}")
+            finish(original_samples, original_pos_error, original_angle_error, "原始路点")
+            return
+
+        candidate_samples = plan_joint_line(
+            candidate_line,
             max_velocity=float(self.get_parameter("direct_max_velocity").value),
             max_acceleration=float(self.get_parameter("direct_max_acceleration").value),
             max_jerk=float(self.get_parameter("direct_max_jerk").value),
             sample_period=float(self.get_parameter("direct_sample_period").value),
+            minimum_duration=original_samples[-1][0] / max_speedup,
         )
-        self._cached_movel_samples[key] = samples
         self.get_logger().info(
-            f"{key} MoveL 已缓存：IK 点={len(positions)}, 轨迹点={len(samples)}, "
-            f"时长={samples[-1][0]:.3f}s, 最大路径偏差={worst_pos:.4f}m/{worst_angle:.3f}rad。"
+            f"{key} MoveL 平滑候选：原始 {original_samples[-1][0]:.3f}s，"
+            f"候选 {candidate_samples[-1][0]:.3f}s，"
+            f"最大路点调整 {float(np.max(np.abs(optimized - raw_positions))):.4f}rad，"
+            f"FK 偏差 {candidate_pos_error:.4f}m/{candidate_angle_error:.3f}rad；等待碰撞检查。"
         )
 
-    def _send_cached_movel_trajectory(self, key: str, label: str, prefix: List[List[float]]) -> None:
+        def after_collision_check(valid: bool, reason: str) -> None:
+            if valid:
+                finish(
+                    candidate_samples, candidate_pos_error, candidate_angle_error,
+                    "平滑路点且碰撞检查通过", collision_verified=True,
+                )
+            else:
+                self.get_logger().warn(f"{key} MoveL 平滑候选碰撞检查未通过，沿用原始路点：{reason}")
+                finish(original_samples, original_pos_error, original_angle_error, "原始路点")
+
+        self._check_movel_collision_path(candidate_line, count, after_collision_check)
+
+    def _check_movel_collision_path(
+        self, line: JointLine, count: int, on_done: Callable[[bool, str], None]
+    ) -> None:
+        if not self._movel_state_validity.service_is_ready():
+            on_done(False, "/check_state_validity 服务不可用")
+            return
         arm = self.arms["both_arms"]
-        samples = self._cached_movel_samples[key]
+        progress = np.linspace(0.0, 1.0, max(2, 4 * count + 1))
+        state = {"index": 0, "active": True, "timer": None}
+
+        def complete(valid: bool, reason: str) -> None:
+            if not state["active"]:
+                return
+            state["active"] = False
+            if state["timer"] is not None:
+                state["timer"].cancel()
+                self.destroy_timer(state["timer"])
+            on_done(valid, reason)
+
+        def check_next() -> None:
+            if not state["active"]:
+                return
+            if state["index"] >= len(progress):
+                complete(True, "全部采样状态有效")
+                return
+            s = float(progress[state["index"]])
+            q, _, _, _ = line.at(s)
+            request = GetStateValidity.Request()
+            request.group_name = arm.规划组
+            request.robot_state = self._seed_robot_state(
+                arm.关节名, seed=dict(zip(arm.关节名, q)), use_preferred_seed=False
+            )
+            try:
+                future = self._movel_state_validity.call_async(request)
+                future.add_done_callback(lambda result, progress_value=s: on_response(result, progress_value))
+            except Exception as exc:
+                complete(False, f"状态检查请求失败：{exc}")
+
+        def on_response(future, progress_value: float) -> None:
+            if not state["active"]:
+                return
+            try:
+                response = future.result()
+                if response is None or not response.valid:
+                    complete(False, f"进度 {progress_value:.3f} 的状态无效")
+                    return
+            except Exception as exc:
+                complete(False, f"状态检查调用失败：{exc}")
+                return
+            state["index"] += 1
+            check_next()
+
+        state["timer"] = self.create_timer(5.0, lambda: complete(False, "状态检查超时"))
+        check_next()
+
+    def _send_cached_movel_trajectory(self, key: str, label: str, prefix: List[List[float]]) -> None:
+        self._send_cached_movel_segments((key,), label, prefix)
+
+    def _send_cached_movel_segments(
+        self, keys: tuple[str, ...], label: str, prefix: List[List[float]],
+        *, start_tolerance_param: str = "cached_place_start_tolerance",
+        goal_position_tolerance: float = 0.0,
+    ) -> None:
+        arm = self.arms["both_arms"]
+        samples = list(self._cached_movel_samples[keys[0]])
+        for key in keys[1:]:
+            following = self._cached_movel_samples[key]
+            if max(abs(a - b) for a, b in zip(samples[-1][1], following[0][1])) > 1e-5:
+                raise ValueError(f"{keys} MoveL 分段终点与起点不连续")
+            offset = samples[-1][0]
+            samples.extend((offset + t, q, v, a) for t, q, v, a in following[1:])
         line_start = samples[0][1]
         current = self._current_positions(arm)
         if prefix and max(abs(a - b) for a, b in zip(prefix[-1], line_start)) > 1e-4:
-            raise ValueError(f"{key} 的预抓取关节终点与 MoveL 起点不一致，请重新预规划")
+            raise ValueError(f"{keys} 的预抓取关节终点与 MoveL 起点不一致，请重新预规划")
         if not prefix:
-            tolerance = max(float(self.get_parameter("cached_place_start_tolerance").value), 0.10)
+            tolerance = max(float(self.get_parameter(start_tolerance_param).value), 0.10)
             if max(abs(a - b) for a, b in zip(current, line_start)) > tolerance:
-                raise ValueError(f"{key} 当前关节状态偏离 MoveL 起点超过 {tolerance:.3f}rad")
+                raise ValueError(f"{keys} 当前关节状态偏离 MoveL 起点超过 {tolerance:.3f}rad")
         bridge_points = [current] + (prefix or [line_start])
         bridge = plan_joint_path(
             bridge_points,
@@ -2665,11 +2862,16 @@ class MoveItGoalCommander(Node):
             point.accelerations = acceleration
             point.time_from_start = self._duration_msg(stamp)
             goal.trajectory.points.append(point)
+        if goal_position_tolerance > 1e-9:
+            goal.goal_tolerance = [
+                JointTolerance(name=name, position=goal_position_tolerance)
+                for name in arm.关节名
+            ]
         self._moveit_busy = True
         self._direct_busy[arm.名称] = True
         self._direct_result_labels[arm.名称] = label
         self.get_logger().info(
-            f"{label} MoveL：桥接 {offset:.3f}s + 直线 {samples[-1][0]:.3f}s，"
+            f"{label} MoveL {keys}：桥接 {offset:.3f}s + 直线 {samples[-1][0]:.3f}s，"
             f"总点数 {len(combined)}。"
         )
         future = controller.send_goal_async(goal)
@@ -2712,6 +2914,32 @@ class MoveItGoalCommander(Node):
             f"joint={joint_name}, error={max_error:.4f} rad > {tolerance:.4f} rad"
         )
 
+    def _cached_movel_is_faster(self, keys: tuple[str, ...], positions: List[List[float]]) -> bool:
+        if not self._movel_enabled() or any(
+            key not in self._cached_movel_samples or key not in self._verified_movel_segments
+            for key in keys
+        ):
+            return False
+        movel_duration = sum(self._cached_movel_samples[key][-1][0] for key in keys)
+        try:
+            original = plan_joint_path(
+                positions,
+                max_velocity=float(self.get_parameter("direct_max_velocity").value),
+                max_acceleration=float(self.get_parameter("direct_max_acceleration").value),
+                max_jerk=float(self.get_parameter("direct_max_jerk").value),
+                sample_period=float(self.get_parameter("direct_sample_period").value),
+            )
+        except ValueError:
+            return True
+        ruckig_duration = original[-1][0]
+        if movel_duration >= 0.90 * ruckig_duration:
+            self.get_logger().info(
+                f"{keys} MoveL {movel_duration:.3f}s 未明显快于原 Ruckig {ruckig_duration:.3f}s，"
+                "执行时沿用原轨迹。"
+            )
+            return False
+        return True
+
     def _send_cached_object_place_trajectory(self, *, combine_push: bool = False) -> None:
         if not self._cached_object_place_positions or not self._cached_object_place_ready:
             raise ValueError("没有可执行的缓存放置轨迹，请先完成抓取上抬预规划，并确认上抬执行成功。")
@@ -2734,6 +2962,14 @@ class MoveItGoalCommander(Node):
             if max(abs(a - b) for a, b in zip(cached[-1], push[0])) > 1e-5:
                 raise ValueError("缓存下降终点与前推起点不连续，拒绝合并执行。")
             cached.extend([list(point) for point in push[1:]])
+        segment_keys = ("place", "push") if combine_push else ("place",)
+        use_movel = self._cached_movel_is_faster(segment_keys, cached)
+        if use_movel and max_error > max(
+            float(self.get_parameter("cached_place_start_tolerance").value), 0.10
+        ):
+            self.get_logger().info("下降 MoveL 起点偏差超出桥接容差，沿用原始 Ruckig。")
+            use_movel = False
+        if combine_push:
             self._cached_object_push_positions = None
 
         self._cached_object_place_positions = None
@@ -2746,13 +2982,22 @@ class MoveItGoalCommander(Node):
             f"收到缓存放置执行请求：当前状态与缓存上抬终点最大误差 {max_error:.4f} rad，"
             f"开始直发{'下降+前推' if combine_push else '下降'}轨迹 {len(cached)} 点。"
         )
+        label = "双臂缓存放置下降+前推" if combine_push else "双臂缓存放置下降"
+        if use_movel:
+            self._send_cached_movel_segments(
+                segment_keys, label, [],
+                goal_position_tolerance=(
+                    float(self.get_parameter("cached_push_goal_tolerance").value) if combine_push else 0.0
+                ),
+            )
+            return
         self._send_direct_joint_trajectory(
             both_arm,
             cached,
             start_from_first_point=not bool(
                 self.get_parameter("cached_trajectory_start_blend_enabled").value
             ),
-            result_label="双臂缓存放置下降+前推" if combine_push else "双臂缓存放置下降",
+            result_label=label,
             goal_position_tolerance=(
                 float(self.get_parameter("cached_push_goal_tolerance").value) if combine_push else 0.0
             ),
@@ -2775,6 +3020,12 @@ class MoveItGoalCommander(Node):
         except ValueError as exc:
             raise ValueError(f"无法执行缓存放置后前推轨迹：{exc}") from exc
 
+        use_movel = self._cached_movel_is_faster(("push",), cached)
+        if use_movel and max_error > max(
+            float(self.get_parameter("cached_push_start_tolerance").value), 0.10
+        ):
+            self.get_logger().info("前推 MoveL 起点偏差超出桥接容差，沿用原始 Ruckig。")
+            use_movel = False
         self._cached_object_push_positions = None
         self._cached_object_push_ready = False
         self._cached_object_push_pending_place = False
@@ -2783,6 +3034,13 @@ class MoveItGoalCommander(Node):
             f"收到缓存放置后前推执行请求：当前状态与缓存下降终点最大误差 {max_error:.4f} rad，"
             f"开始直发前推轨迹 {len(cached)} 点。"
         )
+        if use_movel:
+            self._send_cached_movel_segments(
+                ("push",), "双臂缓存放置后前推", [],
+                start_tolerance_param="cached_push_start_tolerance",
+                goal_position_tolerance=float(self.get_parameter("cached_push_goal_tolerance").value),
+            )
+            return
         self._send_direct_joint_trajectory(
             both_arm,
             cached,
@@ -3476,6 +3734,22 @@ class MoveItGoalCommander(Node):
         )
         self._moveit_busy = False
 
+    def _finish_grasp_cache(self, cache_key: str, plan: dict, positions: List[List[float]]) -> None:
+        self._cached_named_trajectories[cache_key] = [list(point) for point in positions]
+        self._moveit_busy = False
+        self.get_logger().info(
+            f"双臂笛卡尔 waypoint IK 全部成功，plan_id={plan.get('plan_id', '')}, "
+            f"已缓存轨迹 cache_key={cache_key}, points={len(positions)}。"
+        )
+        self._publish_planning_debug(
+            "planning_succeeded",
+            plan=plan,
+            outcome="ok",
+            message="双臂全部 waypoint IK 成功并缓存轨迹",
+            trajectory_point_count=len(positions),
+        )
+        self._publish_status(f"both_arms 预规划成功：{cache_key}", "both_arms")
+
     def _send_cartesian_direct_trajectory(self, plan: dict) -> None:
         left_solutions = plan["left_solutions"]
         right_solutions = plan["right_solutions"]
@@ -3520,26 +3794,16 @@ class MoveItGoalCommander(Node):
             cache_key = str(plan.get("cache_key") or "grasp")
             if cache_key == "grasp" and self._movel_enabled():
                 try:
-                    self._cache_movel_line(cache_key, plan, positions, len(positions))
+                    self._cache_movel_line(
+                        cache_key, plan, positions, len(positions),
+                        on_ready=lambda: self._finish_grasp_cache(cache_key, plan, positions),
+                    )
                 except ValueError as exc:
                     self._moveit_busy = False
                     self.get_logger().error(f"抓取 MoveL 预规划失败：{exc}")
                     self._publish_status(f"both_arms 失败：抓取 MoveL {exc}", "both_arms")
-                    return
-            self._cached_named_trajectories[cache_key] = [list(point) for point in positions]
-            self._moveit_busy = False
-            self.get_logger().info(
-                f"双臂笛卡尔 waypoint IK 全部成功，plan_id={plan.get('plan_id', '')}, "
-                f"已缓存轨迹 cache_key={cache_key}, points={len(positions)}。"
-            )
-            self._publish_planning_debug(
-                "planning_succeeded",
-                plan=plan,
-                outcome="ok",
-                message="双臂全部 waypoint IK 成功并缓存轨迹",
-                trajectory_point_count=len(positions),
-            )
-            self._publish_status(f"both_arms 预规划成功：{cache_key}", "both_arms")
+                return
+            self._finish_grasp_cache(cache_key, plan, positions)
             return
 
         self.get_logger().info(

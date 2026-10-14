@@ -100,6 +100,11 @@ def generate_launch_description():
             DeclareLaunchArgument("movel_cartesian_step_m", default_value="0.010"),
             DeclareLaunchArgument("movel_max_position_error_m", default_value="0.020"),
             DeclareLaunchArgument("movel_max_orientation_error_rad", default_value="0.15"),
+            DeclareLaunchArgument("movel_smoothing_enabled", default_value="false"),
+            DeclareLaunchArgument("movel_smoothing_weight", default_value="10.0"),
+            DeclareLaunchArgument("movel_smoothing_max_joint_deviation", default_value="0.03"),
+            DeclareLaunchArgument("movel_max_speedup", default_value="1.25"),
+            DeclareLaunchArgument("movel_grasp_max_speedup", default_value="1.25"),
             DeclareLaunchArgument("direct_min_segment_duration", default_value="0.12"),
             DeclareLaunchArgument("direct_max_duration_scale", default_value="1.50"),
             DeclareLaunchArgument("direct_joint_jump_warn_threshold", default_value="0.25"),
@@ -228,6 +233,21 @@ def generate_launch_description():
                         ),
                         "movel_max_orientation_error_rad": ParameterValue(
                             LaunchConfiguration("movel_max_orientation_error_rad"), value_type=float
+                        ),
+                        "movel_smoothing_enabled": ParameterValue(
+                            LaunchConfiguration("movel_smoothing_enabled"), value_type=bool
+                        ),
+                        "movel_smoothing_weight": ParameterValue(
+                            LaunchConfiguration("movel_smoothing_weight"), value_type=float
+                        ),
+                        "movel_smoothing_max_joint_deviation": ParameterValue(
+                            LaunchConfiguration("movel_smoothing_max_joint_deviation"), value_type=float
+                        ),
+                        "movel_max_speedup": ParameterValue(
+                            LaunchConfiguration("movel_max_speedup"), value_type=float
+                        ),
+                        "movel_grasp_max_speedup": ParameterValue(
+                            LaunchConfiguration("movel_grasp_max_speedup"), value_type=float
                         ),
                         "direct_min_segment_duration": ParameterValue(
                             LaunchConfiguration("direct_min_segment_duration"), value_type=float
