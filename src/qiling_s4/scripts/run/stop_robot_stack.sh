@@ -28,5 +28,4 @@ done
 
 echo "Requested robot stack shutdown. Verify with:"
 echo "  ros2 node list"
-echo "  ros2 topic info -v lowcmd_arms"
 echo "  ros2 topic info -v lowcmd"

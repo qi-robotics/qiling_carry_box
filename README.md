@@ -1,6 +1,6 @@
 # qiling_s4 工作空间说明
 
-本工作空间保留双臂控制链路：MoveIt 规划、抓取/放置命令节点、FollowJointTrajectory 到 `lowcmd_arms`（真机）/`lowcmd`（仿真）桥接、真机 `/joint_states` 与外部 MuJoCo `/joint_states` 接口。
+本工作空间保留双臂控制链路：MoveIt 规划、抓取/放置命令节点、FollowJointTrajectory 到 `lowcmd` 桥接、真机 `/joint_states` 与外部 MuJoCo `/joint_states` 接口。真机命令使用 `mode_ctrl=5`，由 SDK 融合策略腿。
 
 详细启动命令见:
 
@@ -21,7 +21,7 @@ src/qiling_s4/README.md
 -> moveit_goal_commander
 -> FollowJointTrajectory
 -> moveit_mit_arm_bridge
--> 真机: lowcmd_arms（机载与 rt/lowcmd 腿策略融合）
+-> 真机: lowcmd（DDS rt/lowcmd；mode_ctrl=5，由 SDK 融合策略腿）
 -> 仿真: lowcmd
 ```
 

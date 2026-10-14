@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 实机手臂控制栈：MoveIt + lowstate->joint_states + lowcmd_arms 上肢控制。
-# 上肢走 ROS 话题 lowcmd_arms（DDS rt/lowcmd_arms），由机载与 rt/lowcmd 腿策略融合。
+# 实机手臂控制栈：MoveIt + lowstate->joint_states + lowcmd 上肢控制。
+# 上肢走 ROS 话题 lowcmd（DDS rt/lowcmd），SDK 按 mode_ctrl=5 融合策略腿。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh

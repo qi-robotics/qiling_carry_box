@@ -71,7 +71,7 @@ def _hand_parameters():
 def generate_launch_description():
     return LaunchDescription(
         [
-            DeclareLaunchArgument("use_rviz", default_value="true"),
+            DeclareLaunchArgument("use_rviz", default_value="false"),
             DeclareLaunchArgument("rviz_delay", default_value="3.0"),
             DeclareLaunchArgument("object_cartesian_waypoint_count", default_value="10"),
             DeclareLaunchArgument("object_roundtrip_lift_z", default_value="0.10"),
@@ -123,16 +123,16 @@ def generate_launch_description():
             DeclareLaunchArgument("visual_fixed_y", default_value="0.0"),
             DeclareLaunchArgument("visual_fixed_z", default_value="0.02"),
             DeclareLaunchArgument("joint_state_topic", default_value="/joint_states"),
-            # ROS topic lowcmd_arms maps to DDS rt/lowcmd_arms under rmw_cyclonedds.
+            # The installed SDK subscribes to rt/lowcmd and merges mode_ctrl=5 arms with policy legs.
             DeclareLaunchArgument(
                 "lowcmd_topic",
-                default_value="lowcmd_arms",
-                description="Real-robot arm aux LowCmd topic (ROS name; DDS rt/lowcmd_arms).",
+                default_value="lowcmd",
+                description="SDK main LowCmd topic (ROS name; DDS rt/lowcmd).",
             ),
             DeclareLaunchArgument(
                 "lowcmd_mode_ctrl",
-                default_value="0",
-                description="Unused for source selection on lowcmd_arms; keep 0.",
+                default_value="5",
+                description="SDK arm and policy-leg merge mode on rt/lowcmd.",
             ),
             DeclareLaunchArgument("body_dof", default_value="26"),
             DeclareLaunchArgument("reject_zero_state_glitches", default_value="true"),

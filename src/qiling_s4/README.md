@@ -40,7 +40,7 @@ sensor_msgs/msg/JointState
 控制输出：
 
 ```text
-真机：lowcmd_arms（ROS；DDS rt/lowcmd_arms）
+真机：lowcmd（ROS；DDS rt/lowcmd；mode_ctrl=5）
 仿真：lowcmd
 qi/msg/LowCmd
 ```

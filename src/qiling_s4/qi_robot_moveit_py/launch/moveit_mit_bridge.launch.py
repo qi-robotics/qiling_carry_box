@@ -20,15 +20,12 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "lowcmd_topic",
                 default_value="lowcmd",
-                description=(
-                    "ROS LowCmd topic. Real robot arm aux is lowcmd_arms "
-                    "(DDS rt/lowcmd_arms). External sim typically keeps lowcmd."
-                ),
+                description="ROS LowCmd topic; installed SDK subscribes on DDS rt/lowcmd.",
             ),
             DeclareLaunchArgument(
                 "lowcmd_mode_ctrl",
-                default_value="0",
-                description="LowCmd.mode_ctrl; unused for source on rt/lowcmd_arms, default 0.",
+                default_value="5",
+                description="LowCmd.mode_ctrl=5 merges arm targets with policy legs on the SDK.",
             ),
             DeclareLaunchArgument("joint_state_topic", default_value="/joint_states"),
             DeclareLaunchArgument(

@@ -9,7 +9,7 @@
 -> vision_grasp_sequence
 -> moveit_goal_commander
 -> moveit_mit_arm_bridge
--> lowcmd_arms（DDS rt/lowcmd_arms）
+-> lowcmd（DDS rt/lowcmd，mode_ctrl=5）
 -> 真机 SDK / 外部仿真
 ```
 
@@ -23,7 +23,7 @@
 | ROS 版本 | ROS 2 Humble |
 | 控制对象 | qiling_s4 双臂上肢 |
 | 规划模块 | MoveIt 2 + OMPL + Cartesian direct IK |
-| 控制输出 | 真机 `lowcmd_arms`（DDS `rt/lowcmd_arms`）；仿真 `lowcmd` |
+| 控制输出 | 真机 `lowcmd`（DDS `rt/lowcmd`，`mode_ctrl=5`）；仿真 `lowcmd` |
 | 状态输入 | `/joint_states` |
 | 抓取命令 | `/vision_grasp/grasp_command` |
 | 放置命令 | `/vision_grasp/place_command` |

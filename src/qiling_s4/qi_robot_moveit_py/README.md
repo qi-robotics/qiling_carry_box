@@ -5,7 +5,7 @@
 | 节点 | 作用 |
 | --- | --- |
 | `moveit_goal_commander` | 提供 `/moveit_arm_goal` 服务，负责 MoveIt 规划和双臂目标派发 |
-| `moveit_mit_arm_bridge` | 提供 FollowJointTrajectory action server，读取 `/joint_states`；真机输出 `lowcmd_arms`，仿真输出 `lowcmd` |
+| `moveit_mit_arm_bridge` | 提供 FollowJointTrajectory action server，读取 `/joint_states`；真机输出 `lowcmd`（`mode_ctrl=5`），仿真输出 `lowcmd` |
 | `vision_grasp_sequence` | 调用外部视觉检测服务，执行抓取、上抬、等待放置、下放、前推和回 home 流程 |
 | `lowstate_joint_states_bridge` | 真机链路专用，将 `lowstate` 转成 `/joint_states` |
 | `lowcmd_joint_states_echo` | RViz-only 模式专用，将 `lowcmd` 回显成 `/joint_states` |
@@ -114,7 +114,7 @@ detect                        upper_limb_interface/srv/DetectAprilTag
 控制输出：
 
 ```text
-lowcmd_arms（真机）/ lowcmd（仿真）   qi/msg/LowCmd
+lowcmd（真机/仿真）                 qi/msg/LowCmd
 /handscmd                             qi/msg/HandsCmd
 /handsstate                           qi/msg/HandsState
 ```
@@ -137,7 +137,6 @@ ros2 topic echo /handsstate qi/msg/HandsState
 ```bash
 ros2 topic echo /joint_states --once
 ros2 topic echo /moveit_arm_target --once
-ros2 topic info -v lowcmd_arms
 ros2 topic info -v lowcmd
 ros2 topic echo /both_arms/result --once
 ros2 topic echo /moveit/planning_debug

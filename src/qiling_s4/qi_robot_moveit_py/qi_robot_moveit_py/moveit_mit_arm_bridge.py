@@ -183,11 +183,10 @@ class MoveItMitArmBridge(Node):
         super().__init__("moveit_mit_arm_bridge")
         self.declare_parameter("command_topic", "/moveit_arm_command")
         self.declare_parameter("direct_lowcmd", False)
-        # Real-robot SDK arm channel is ROS topic lowcmd_arms (-> DDS rt/lowcmd_arms).
-        # Keep "lowcmd" as the node default for external-sim / legacy callers; robot_stack overrides.
+        # The installed SDK receives arm commands on the main rt/lowcmd topic.
         self.declare_parameter("lowcmd_topic", "lowcmd")
-        # On rt/lowcmd_arms the SDK does not use mode_ctrl for source selection; 0 is fine.
-        self.declare_parameter("lowcmd_mode_ctrl", 0)
+        # mode_ctrl=5 tells the SDK to merge these arms with cached policy legs.
+        self.declare_parameter("lowcmd_mode_ctrl", 5)
         self.declare_parameter("joint_state_topic", "/joint_states")
         self.declare_parameter("left_controller_action", "/left_arm_position_controller/follow_joint_trajectory")
         self.declare_parameter("right_controller_action", "/right_arm_position_controller/follow_joint_trajectory")
@@ -1027,8 +1026,8 @@ class MoveItMitArmBridge(Node):
         self.publisher.publish(msg)
 
     def _publish_lowcmd(self, stamp, commands_by_name: Dict[str, MITJointCommand]) -> None:
-        # SDK arm aux topic requires a full-body motors[] (legs may be placeholders).
-        # Do not publish arm-only short packets; onboard composer copies arm indices only.
+        # The SDK expects a full-body motors[] packet and replaces the leg slots
+        # with the cached policy command when mode_ctrl=5.
         msg = LowCmd()
         msg.mode = 1
         msg.mode_ak = 1
@@ -1046,7 +1045,7 @@ class MoveItMitArmBridge(Node):
                 motor.kp = float(command.kp)
                 motor.kd = float(command.kd)
             else:
-                # Leg / non-arm slots: placeholders. Onboard keeps policy legs from rt/lowcmd.
+                # Leg slots are placeholders for the SDK's mode_ctrl=5 merge.
                 motor.mode = 0
                 motor.q = 0.0
                 motor.dq = 0.0

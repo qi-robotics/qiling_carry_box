@@ -1,0 +1,7 @@
+# This deployment has no 3D sensor. MoveIt Humble skips updater plugins
+# whose name begins with "~", while retaining collision-object monitoring.
+octomap_resolution: 0.1
+sensors:
+  - disabled_octomap
+disabled_octomap:
+  sensor_plugin: "~"

@@ -2,7 +2,7 @@
 
 这个包只保留 S4 双臂 MoveIt 配置和两个控制入口：
 
-- `robot_stack.launch.py`：真机双臂控制，读取 `lowstate`，发布 `/joint_states`，输出 `lowcmd_arms`（DDS `rt/lowcmd_arms`）。
+- `robot_stack.launch.py`：真机双臂控制，读取 `lowstate`，发布 `/joint_states`，输出 `lowcmd`（DDS `rt/lowcmd`，`mode_ctrl=5`）。
 - `external_sim_arm_stack.launch.py`：外部 MuJoCo 仿真接入，仿真器由其他模块启动，本包读取外部 `/joint_states`，输出 `lowcmd`；也可通过 `publish_fake_joint_states:=true` 启用 RViz-only 状态回显。
 
 本包不再启动本地 MuJoCo、视觉检测、相机、雷达或导航。
@@ -21,16 +21,21 @@ lowstate
   -> /joint_states
   -> move_group + moveit_goal_commander
   -> moveit_mit_arm_bridge
-  -> lowcmd_arms   # ROS name; DDS rt/lowcmd_arms
-机载融合：rt/lowcmd（腿策略）+ rt/lowcmd_arms（上肢覆盖）
+  -> lowcmd   # ROS name; DDS rt/lowcmd; mode_ctrl=5
+SDK 在同一 rt/lowcmd 上融合 mode_ctrl=5 的上肢目标与策略腿
 ```
 
 真机默认：
 
-- `lowcmd_topic:=lowcmd_arms`
-- `lowcmd_mode_ctrl:=0`（上肢专用话题不再用 `mode_ctrl=5` 判源）
+- `use_rviz:=false`（端侧无显示器；需要图形界面时可显式设为 `true`）
+- `lowcmd_topic:=lowcmd`
+- `lowcmd_mode_ctrl:=5`（SDK 融合上肢目标与策略腿）
 - `publish_rate:=50.0`
 - `body_dof:=26`（全身长度 motors；腿槽占位）
+
+本部署没有 3D 传感器。`config/sensors_3d.yaml` 显式跳过 Octomap 传感器更新器；
+MoveIt 仍能处理机器人自身碰撞及外部发布的规划场景碰撞物体，但不会从深度图或点云
+自动构建周围障碍物。接入 3D 传感器时，需要更新该配置。
 
 ## 外部仿真入口
 
@@ -118,7 +123,7 @@ MotionPlanning display 必须订阅 `/monitored_planning_scene`。
 /vision_grasp/grasp_command              std_msgs/msg/String
 /vision_grasp/place_command              std_msgs/msg/String
 /joint_states                            sensor_msgs/msg/JointState
-lowcmd_arms（真机）/ lowcmd（仿真）      qi/msg/LowCmd
+lowcmd（真机/仿真）                    qi/msg/LowCmd
 /handscmd                               qi/msg/HandsCmd
 /handsstate                             qi/msg/HandsState
 ```

@@ -21,7 +21,7 @@ flowchart TB
     JointState --> Planner
     JointState --> Bridge
 
-    Bridge --> LowCmd["lowcmd_arms<br/>DDS rt/lowcmd_arms"]
+    Bridge --> LowCmd["lowcmd / mode_ctrl=5<br/>DDS rt/lowcmd"]
     LowCmd --> Robot["真机 SDK / 外部仿真"]
     Hand --> Robot
 ```
@@ -44,7 +44,7 @@ flowchart LR
     end
 
     subgraph Output["输出"]
-        H["lowcmd_arms<br/>双臂控制"]
+        H["lowcmd / mode_ctrl=5<br/>双臂控制"]
         I["/handscmd<br/>灵巧手开合"]
         J["状态/诊断<br/>/vision_grasp/status<br/>/both_arms/result"]
     end
@@ -120,7 +120,7 @@ sequenceDiagram
     Planner-->>Seq: 返回规划结果
     Seq->>Planner: 执行预抓取与抓取轨迹
     Planner->>Bridge: 下发 FollowJointTrajectory
-    Bridge->>Robot: 持续发布 lowcmd_arms
+    Bridge->>Robot: 持续发布 lowcmd (mode_ctrl=5)
     Robot-->>Bridge: 执行结果
     Bridge-->>Planner: action result
     Planner-->>Seq: /both_arms/result
@@ -128,13 +128,13 @@ sequenceDiagram
     Seq->>Hand: 闭合灵巧手
     Seq->>Planner: 执行上抬轨迹
     Planner->>Bridge: 下发缓存轨迹
-    Bridge->>Robot: lowcmd_arms
+    Bridge->>Robot: lowcmd (mode_ctrl=5)
     Planner-->>Seq: 上抬完成
 
     User->>Seq: 发送 place 命令
     Seq->>Planner: 执行缓存下降轨迹
     Planner->>Bridge: 下发轨迹
-    Bridge->>Robot: lowcmd_arms
+    Bridge->>Robot: lowcmd (mode_ctrl=5)
     Planner-->>Seq: 下降完成
     Seq->>Hand: 张开灵巧手
     Seq->>Planner: 回 home
@@ -149,7 +149,7 @@ flowchart TB
         R1["SDK lowstate"] --> R2["lowstate_joint_states_bridge"]
         R2 --> R3["/joint_states"]
         R3 --> R4["MoveIt + 轨迹桥"]
-        R4 --> R5["lowcmd_arms<br/>(DDS rt/lowcmd_arms)"]
+        R4 --> R5["lowcmd / mode_ctrl=5<br/>(DDS rt/lowcmd)"]
         R5 --> R6["SDK 执行上肢控制"]
     end
 
@@ -163,6 +163,6 @@ flowchart TB
 ## 说明
 
 - 当前项目主职责是双臂上肢控制；下肢控制不在 qiling_s4 侧处理。
-- 真机向 `lowcmd_arms`（DDS `rt/lowcmd_arms`）发全身长度 `LowCmd`；机载把该包上肢覆盖到 `rt/lowcmd` 腿策略上。`mode_ctrl` 不再用于判源。
+- 真机向 `lowcmd`（DDS `rt/lowcmd`）发全身长度 `LowCmd` 且设置 `mode_ctrl=5`；SDK 用已缓存的策略腿替换包内腿部占位数据。
 - `/handsstate` 当前只缓存，不作为闭环控制依据；灵巧手动作由 `/handscmd` 开环下发。
 - 真机和仿真都依赖唯一有效的 `/joint_states`，不要同时启动多个状态源。
