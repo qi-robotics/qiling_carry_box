@@ -71,7 +71,7 @@ def _hand_parameters():
 def generate_launch_description():
     return LaunchDescription(
         [
-            DeclareLaunchArgument("use_rviz", default_value="true"),
+            DeclareLaunchArgument("use_rviz", default_value="false"),
             DeclareLaunchArgument("rviz_delay", default_value="3.0"),
             DeclareLaunchArgument("object_cartesian_waypoint_count", default_value="10"),
             DeclareLaunchArgument("object_roundtrip_lift_z", default_value="0.10"),
