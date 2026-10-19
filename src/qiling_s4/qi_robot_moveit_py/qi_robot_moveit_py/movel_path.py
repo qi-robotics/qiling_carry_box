@@ -101,3 +101,24 @@ def plan_joint_line(
             (acceleration / duration**2).tolist(),
         ))
     return samples
+
+
+JointSample = tuple[float, list[float], list[float], list[float]]
+
+
+def stitch_joint_samples(first: Sequence[JointSample], second: Sequence[JointSample]) -> list[JointSample]:
+    """Join two stopped trajectories without sending a second controller goal."""
+    if not first or len(second) < 2 or abs(second[0][0]) > 1e-9:
+        raise ValueError("MoveL 轨迹段缺少有效起点或终点")
+    before, after = first[-1], second[0]
+    if len(before[1]) != len(after[1]) or max(
+        abs(a - b) for a, b in zip(before[1], after[1])
+    ) > 1e-4:
+        raise ValueError("MoveL 相邻直线的关节端点不连续")
+    if any(abs(value) > 1e-6 for sample in (before, after) for values in sample[2:] for value in values):
+        raise ValueError("MoveL 直线转角必须以零速度、零加速度衔接")
+    offset = before[0]
+    return list(first) + [
+        (offset + time, position, velocity, acceleration)
+        for time, position, velocity, acceleration in second[1:]
+    ]

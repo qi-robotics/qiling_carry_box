@@ -2,7 +2,7 @@ import math
 import re
 import threading
 import time
-from typing import Callable, Optional, Sequence
+from typing import Optional, Sequence
 
 import rclpy
 from communicate_interface.srv import MoveItArmGoal
@@ -1093,7 +1093,11 @@ class VisionGraspSequence(Node):
             return False
 
         self.get_logger().info(f"{label}目标已接收，等待 {self.result_topic} 下降执行结果。")
-        return self._wait_for_motion_result(label, allow_timeout_success=allow_motion_timeout)
+        expected = "缓存放置下降+前推" if request.combine_place_push else "缓存放置下降"
+        return self._wait_for_motion_result(
+            label, allow_timeout_success=allow_motion_timeout,
+            expected_result_keywords=(expected,),
+        )
 
     def _send_cached_object_push_goal(
         self,
@@ -1144,7 +1148,6 @@ class VisionGraspSequence(Node):
         positions: Sequence[float],
         label: str,
         *,
-        on_goal_accepted: Optional[Callable[[], None]] = None,
         joint_waypoints: Sequence[Sequence[float]] = (),
     ) -> bool:
         request = MoveItArmGoal.Request()
@@ -1175,8 +1178,6 @@ class VisionGraspSequence(Node):
             self.get_logger().error(f"{label}目标未被接收：{response.message}")
             return False
 
-        if on_goal_accepted is not None:
-            on_goal_accepted()
         self.get_logger().info(f"{label}目标已接收，等待 {self.result_topic} 执行结果。")
         return self._wait_for_motion_result(label)
 
@@ -1269,9 +1270,10 @@ class VisionGraspSequence(Node):
                 self._publish_status("place", "push", "fail", "放置后前推失败，保持灵巧手闭合并停止流程")
                 return False
             self._publish_status("place", "push", "ok", "放置后前推轨迹执行完成")
-        else:
+        elif abs(self.post_place_push_x) <= 1.0e-6:
             self.get_logger().info("post_place_push_x 为 0，跳过放置后前推阶段。")
 
+        self._publish_grasp_result("place success")
         self.get_logger().info("放置后前推完成，开始张开灵巧手。")
         self._publish_status("hand", "command", "info", "放置后前推完成，开始张开灵巧手")
         if not self._send_hands_command(grasp=False):
@@ -1286,7 +1288,7 @@ class VisionGraspSequence(Node):
 
         self.get_logger().info("开始依次返回 home 过渡点和 home 点。")
         self._publish_status("place", "motion", "info", "开始回home")
-        result = self._send_home_joint_goal(publish_place_success_on_second_transition_start=True)
+        result = self._send_home_joint_goal()
         if result:
             self._publish_status("place", "motion", "ok", "回home完成")
             self.get_logger().info("双臂已回 home，追加发送灵巧手张开命令。")
@@ -1305,11 +1307,7 @@ class VisionGraspSequence(Node):
             or self.detach_after_lift
         )
 
-    def _send_home_joint_goal(
-        self,
-        *,
-        publish_place_success_on_second_transition_start: bool = False,
-    ) -> bool:
+    def _send_home_joint_goal(self) -> bool:
         max_attempts = max(1, self.home_retry_count + 1)
         if self.combined_task_trajectories:
             for attempt in range(1, max_attempts + 1):
@@ -1319,8 +1317,6 @@ class VisionGraspSequence(Node):
                     label,
                     joint_waypoints=self.home_transition_joint_waypoints,
                 ):
-                    if publish_place_success_on_second_transition_start:
-                        self._publish_grasp_result("place success")
                     return True
                 if attempt < max_attempts:
                     end_time = time.monotonic() + self.home_retry_wait_sec
@@ -1328,7 +1324,6 @@ class VisionGraspSequence(Node):
                         time.sleep(0.05)
             return False
 
-        place_success_published = False
         for attempt in range(1, max_attempts + 1):
             label = "双臂回 home" if attempt == 1 else f"双臂回 home 重试 {attempt - 1}"
             transition_ok = True
@@ -1338,23 +1333,9 @@ class VisionGraspSequence(Node):
                     transition_label += f" 重试 {attempt - 1}"
                 self._publish_status("place", "return_transition", "info", f"开始回home过渡点{index}")
 
-                on_goal_accepted = None
-                if (
-                    publish_place_success_on_second_transition_start
-                    and index == 2
-                    and not place_success_published
-                ):
-                    def publish_place_success() -> None:
-                        nonlocal place_success_published
-                        self._publish_grasp_result("place success")
-                        place_success_published = True
-
-                    on_goal_accepted = publish_place_success
-
                 if self._send_both_arm_joint_goal(
                     positions,
                     transition_label,
-                    on_goal_accepted=on_goal_accepted,
                 ):
                     self._publish_status("place", "return_transition", "ok", f"回home过渡点{index}完成")
                     continue

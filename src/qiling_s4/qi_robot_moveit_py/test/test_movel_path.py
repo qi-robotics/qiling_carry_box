@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from qi_robot_moveit_py.movel_path import JointLine, plan_joint_line
+from qi_robot_moveit_py.movel_path import JointLine, plan_joint_line, stitch_joint_samples
 
 
 def test_joint_line_has_continuous_position_velocity_and_acceleration():
@@ -51,3 +51,21 @@ def test_nonuniform_ik_samples_still_respect_jerk_limit():
         abs((b[3][joint] - a[3][joint]) / (b[0] - a[0]))
         for a, b in zip(samples, samples[1:]) for joint in range(2)
     ) <= 3.0
+
+
+def test_two_straight_lines_share_one_timeline_and_stop_at_corner():
+    down = plan_joint_line(
+        JointLine([0.0, 1.0], [[0.0], [0.3]]),
+        max_velocity=0.85, max_acceleration=0.6, max_jerk=3.0, sample_period=0.02,
+    )
+    push = plan_joint_line(
+        JointLine([0.0, 1.0], [[0.3], [0.5]]),
+        max_velocity=0.85, max_acceleration=0.6, max_jerk=3.0, sample_period=0.02,
+    )
+    combined = stitch_joint_samples(down, push)
+    assert len(combined) == len(down) + len(push) - 1
+    assert all(b[0] > a[0] for a, b in zip(combined, combined[1:]))
+    assert combined[len(down) - 1][1:] == down[-1][1:]
+    assert combined[-1][0] == pytest.approx(down[-1][0] + push[-1][0])
+    with pytest.raises(ValueError, match="端点不连续"):
+        stitch_joint_samples(down, [(0.0, [0.4], [0.0], [0.0]), push[-1]])
