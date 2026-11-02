@@ -156,6 +156,9 @@ class MoveItGoalCommander(Node):
         self.declare_parameter("object_roundtrip_hold_sec", 2.0)
         self.declare_parameter("carry_x_offset", -0.07)
         self.declare_parameter("post_place_push_x", 0.0)
+        self.declare_parameter("post_place_retract_x", 0.0)
+        self.declare_parameter("post_place_spread_y", 0.0)
+        self.declare_parameter("post_place_lower_z", 0.0)
         self.declare_parameter("robot_description_xml", "")
         self.declare_parameter("tool_pose_publish_period", 0.05)
         self.declare_parameter("goal_service_name", "/moveit_arm_goal")
@@ -201,12 +204,14 @@ class MoveItGoalCommander(Node):
         self._cached_object_place_ready = False
         self._cached_object_place_pending_lift = False
         self._cached_object_push_positions: Optional[List[List[float]]] = None
+        self._cached_object_tail_segment_keys: tuple[str, ...] = ()
         self._cached_object_push_ready = False
         self._cached_object_push_pending_place = False
         self._cached_named_trajectories: Dict[str, List[List[float]]] = {}
         self._cached_movel_samples: Dict[str, List[tuple[float, list[float], list[float], list[float]]]] = {}
         self._cached_named_place_trajectories: Dict[str, List[List[float]]] = {}
         self._cached_named_push_trajectories: Dict[str, List[List[float]]] = {}
+        self._cached_named_tail_segment_keys: Dict[str, tuple[str, ...]] = {}
         self._planning_sequence = 0
         self._planning_debug_enabled = bool(self.get_parameter("planning_debug_enabled").value)
         self._robot_model: Optional[URDF] = None
@@ -1928,7 +1933,7 @@ class MoveItGoalCommander(Node):
             elif arm_name == "both_arms" and self._cached_object_push_pending_place:
                 self._cached_object_push_ready = True
                 self._cached_object_push_pending_place = False
-                self.get_logger().info("下降轨迹执行成功，缓存放置后前推轨迹已允许执行。")
+                self.get_logger().info("下降轨迹执行成功，缓存放置后续轨迹已允许执行。")
             self._publish_status(f"{result_label}执行成功", arm_name)
             self.get_logger().info(f"{result_label}执行成功。")
         else:
@@ -1949,13 +1954,13 @@ class MoveItGoalCommander(Node):
                     self._cached_object_push_ready = True
                     self._cached_object_push_pending_place = False
                     self.get_logger().warn(
-                        "下降轨迹未完全进入目标容差，保留缓存前推轨迹；执行前仍会检查当前关节与前推起点。"
+                        "下降轨迹未完全进入目标容差，保留缓存放置后续轨迹；执行前仍会检查起点。"
                     )
                 else:
                     self._cached_object_push_positions = None
                     self._cached_object_push_ready = False
                     self._cached_object_push_pending_place = False
-                    self.get_logger().error("下降轨迹执行失败，已清空缓存放置后前推轨迹。")
+                    self.get_logger().error("下降轨迹执行失败，已清空缓存放置后续轨迹。")
             text = f"{result_label}执行失败({result.error_code})：{result.error_string}"
             self._publish_status(text, arm_name)
             self.get_logger().error(text)
@@ -1966,7 +1971,7 @@ class MoveItGoalCommander(Node):
         self._cached_object_push_positions = None
         self._cached_object_push_ready = False
         self._cached_object_push_pending_place = False
-        self.get_logger().error(f"{result_label}未成功完成，已作废缓存放置后前推轨迹。")
+        self.get_logger().error(f"{result_label}未成功完成，已作废缓存放置后续轨迹。")
 
     def _base_request(self, arm: ArmConfig, constraints: Constraints) -> MotionPlanRequest:
         request = MotionPlanRequest()
@@ -2231,6 +2236,31 @@ class MoveItGoalCommander(Node):
         )
         self._request_next_cartesian_left_ik(plan)
 
+    def _post_place_retract_offsets(self) -> tuple[float, float, float]:
+        names = ("post_place_retract_x", "post_place_spread_y", "post_place_lower_z")
+        values = tuple(float(self.get_parameter(name).value) for name in names)
+        for name, value in zip(names, values):
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"{name} 必须是非负的有限米数；0 表示不移动。")
+        return values
+
+    def _post_place_retract_targets(
+        self,
+        left_start: PoseStamped,
+        right_start: PoseStamped,
+        retract_x: float,
+        spread_y: float,
+        lower_z: float,
+    ) -> tuple[PoseStamped, PoseStamped]:
+        left = self._copy_pose_stamped(left_start)
+        right = self._copy_pose_stamped(right_start)
+        for target in (left, right):
+            target.pose.position.x -= retract_x
+            target.pose.position.z -= lower_z
+        left.pose.position.y += spread_y
+        right.pose.position.y -= spread_y
+        return left, right
+
     def _send_object_lift_and_cache_place_trajectory(
         self,
         object_place: PoseStamped,
@@ -2240,11 +2270,12 @@ class MoveItGoalCommander(Node):
         cache_key: str = "lift_place",
     ) -> None:
         if plan_only and cache_key == "lift_place":
-            for key in (cache_key, "place", "push"):
+            for key in (cache_key, "place", "push", "post_push_lower"):
                 self._cached_movel_samples.pop(key, None)
             self._cached_named_trajectories.pop(cache_key, None)
             self._cached_named_place_trajectories.pop(cache_key, None)
             self._cached_named_push_trajectories.pop(cache_key, None)
+            self._cached_named_tail_segment_keys.pop(cache_key, None)
         if not self._compute_ik.wait_for_service(timeout_sec=self._moveit_service_wait_sec):
             self.get_logger().error("MoveIt /compute_ik 服务不可用，无法预规划箱体放置路径。")
             self._publish_status("both_arms 失败：/compute_ik 服务不可用", "both_arms")
@@ -2271,6 +2302,7 @@ class MoveItGoalCommander(Node):
         object_place_shifted.pose.position.x += carry_x
 
         push_x = float(self.get_parameter("post_place_push_x").value)
+        retract_x, spread_y, lower_z = self._post_place_retract_offsets()
         object_push = self._copy_pose_stamped(object_place_shifted)
         object_push.pose.position.x += push_x
 
@@ -2278,6 +2310,7 @@ class MoveItGoalCommander(Node):
         lift_steps = steps_per_leg
         place_steps = steps_per_leg
         push_steps = steps_per_leg
+        lower_steps = steps_per_leg
         if plan_only and cache_key == "lift_place" and self._movel_enabled():
             lift_steps = self._movel_step_count(lift_steps, self._pose_distance(object_start, object_lift))
             place_steps = self._movel_step_count(place_steps, self._pose_distance(object_lift, object_place_shifted))
@@ -2295,18 +2328,36 @@ class MoveItGoalCommander(Node):
         right_offset = self._object_to_tool_matrix("right")
         left_start = self._tool_pose_from_object_waypoint(object_start, left_offset)
         right_start = self._tool_pose_from_object_waypoint(object_start, right_offset)
+        left_waypoints = [self._tool_pose_from_object_waypoint(pose, left_offset) for pose in object_waypoints]
+        right_waypoints = [self._tool_pose_from_object_waypoint(pose, right_offset) for pose in object_waypoints]
+        left_push, right_push = left_waypoints[-1], right_waypoints[-1]
+        left_retract, right_retract = self._post_place_retract_targets(
+            left_push, right_push, retract_x, spread_y, lower_z
+        )
+        actual_lower_steps = 0
+        if max(retract_x, spread_y, lower_z) > 1.0e-6:
+            if plan_only and cache_key == "lift_place" and self._movel_enabled():
+                distance = max(
+                    self._pose_distance(left_push, left_retract),
+                    self._pose_distance(right_push, right_retract),
+                )
+                lower_steps = self._movel_step_count(lower_steps, distance)
+            left_waypoints += self._interpolate_pose_waypoints(left_push, left_retract, lower_steps)
+            right_waypoints += self._interpolate_pose_waypoints(right_push, right_retract, lower_steps)
+            actual_lower_steps = lower_steps
         self._log_object_path_pose_diagnostics("箱体预规划放置路径", object_start, object_place_shifted)
         plan = {
             "index": 0,
-            "steps": len(object_waypoints),
+            "steps": len(left_waypoints),
             "lift_steps": lift_steps,
             "push_steps": len(push_waypoints),
+            "lower_steps": actual_lower_steps,
             "cache_place_after_lift": True,
             "frame_id": frame_id,
             "left_start": left_start,
             "right_start": right_start,
-            "left_waypoints": [self._tool_pose_from_object_waypoint(pose, left_offset) for pose in object_waypoints],
-            "right_waypoints": [self._tool_pose_from_object_waypoint(pose, right_offset) for pose in object_waypoints],
+            "left_waypoints": left_waypoints,
+            "right_waypoints": right_waypoints,
             "left_solutions": [],
             "right_solutions": [],
             "seed": self._object_plan_seed(),
@@ -2318,13 +2369,16 @@ class MoveItGoalCommander(Node):
         self._cached_object_place_ready = False
         self._cached_object_place_pending_lift = False
         self._cached_object_push_positions = None
+        self._cached_object_tail_segment_keys = ()
         self._cached_object_push_ready = False
         self._cached_object_push_pending_place = False
         self._moveit_busy = True
         self.get_logger().info(
             f"箱体放置预规划：上抬 {lift_steps} 点 + 下降 {place_steps} 点"
             + (f" + 放置后前推 {len(push_waypoints)} 点" if push_waypoints else "")
-            + f"，lift_z={lift_z:+.3f}m，post_place_push_x={push_x:+.3f}m；"
+            + (f" + 回撤下放 {actual_lower_steps} 点" if actual_lower_steps else "")
+            + f"，lift_z={lift_z:+.3f}m，前推={push_x:+.3f}m，"
+            + f"回撤={retract_x:.3f}m，外展={spread_y:.3f}m，下放={lower_z:.3f}m；"
             + ("本次只预规划并缓存，不执行。" if plan_only else "本次只执行上抬，下降轨迹缓存等待放置指令。")
         )
         self._request_next_cartesian_left_ik(plan)
@@ -2338,11 +2392,12 @@ class MoveItGoalCommander(Node):
         cache_key: str = "lift_place",
     ) -> None:
         if plan_only and cache_key == "lift_place":
-            for key in (cache_key, "place", "push"):
+            for key in (cache_key, "place", "push", "post_push_lower"):
                 self._cached_movel_samples.pop(key, None)
             self._cached_named_trajectories.pop(cache_key, None)
             self._cached_named_place_trajectories.pop(cache_key, None)
             self._cached_named_push_trajectories.pop(cache_key, None)
+            self._cached_named_tail_segment_keys.pop(cache_key, None)
         if not self._compute_ik.wait_for_service(timeout_sec=self._moveit_service_wait_sec):
             raise ValueError("MoveIt /compute_ik 服务不可用，无法规划关节抓取后的上抬/下降。")
 
@@ -2378,15 +2433,20 @@ class MoveItGoalCommander(Node):
         right_place.pose.position.x += carry_x
 
         push_x = float(self.get_parameter("post_place_push_x").value)
+        retract_x, spread_y, lower_z = self._post_place_retract_offsets()
         left_push = self._copy_pose_stamped(left_place)
         right_push = self._copy_pose_stamped(right_place)
         left_push.pose.position.x += push_x
         right_push.pose.position.x += push_x
+        left_retract, right_retract = self._post_place_retract_targets(
+            left_push, right_push, retract_x, spread_y, lower_z
+        )
 
         steps_per_leg = max(int(self.get_parameter("object_cartesian_waypoint_count").value), 2)
         lift_steps = steps_per_leg
         place_steps = steps_per_leg
         push_steps = steps_per_leg
+        lower_steps = steps_per_leg
         if plan_only and cache_key == "lift_place" and self._movel_enabled():
             distance = max(self._pose_distance(left_start, left_lift), self._pose_distance(right_start, right_lift))
             lift_steps = self._movel_step_count(lift_steps, distance)
@@ -2395,6 +2455,12 @@ class MoveItGoalCommander(Node):
             if abs(push_x) > 1.0e-6:
                 distance = max(self._pose_distance(left_place, left_push), self._pose_distance(right_place, right_push))
                 push_steps = self._movel_step_count(push_steps, distance)
+            if max(retract_x, spread_y, lower_z) > 1.0e-6:
+                distance = max(
+                    self._pose_distance(left_push, left_retract),
+                    self._pose_distance(right_push, right_retract),
+                )
+                lower_steps = self._movel_step_count(lower_steps, distance)
         left_waypoints = self._interpolate_pose_waypoints(left_start, left_lift, lift_steps)
         left_waypoints += self._interpolate_pose_waypoints(left_lift, left_place, place_steps)
         right_waypoints = self._interpolate_pose_waypoints(right_start, right_lift, lift_steps)
@@ -2404,11 +2470,17 @@ class MoveItGoalCommander(Node):
             left_waypoints += self._interpolate_pose_waypoints(left_place, left_push, push_steps)
             right_waypoints += self._interpolate_pose_waypoints(right_place, right_push, push_steps)
             actual_push_steps = push_steps
+        actual_lower_steps = 0
+        if max(retract_x, spread_y, lower_z) > 1.0e-6:
+            left_waypoints += self._interpolate_pose_waypoints(left_push, left_retract, lower_steps)
+            right_waypoints += self._interpolate_pose_waypoints(right_push, right_retract, lower_steps)
+            actual_lower_steps = lower_steps
         plan = {
             "index": 0,
             "steps": len(left_waypoints),
             "lift_steps": lift_steps,
             "push_steps": actual_push_steps,
+            "lower_steps": actual_lower_steps,
             "cache_place_after_lift": True,
             "frame_id": frame_id,
             "left_start": left_start,
@@ -2426,6 +2498,7 @@ class MoveItGoalCommander(Node):
         self._cached_object_place_ready = False
         self._cached_object_place_pending_lift = False
         self._cached_object_push_positions = None
+        self._cached_object_tail_segment_keys = ()
         self._cached_object_push_ready = False
         self._cached_object_push_pending_place = False
         self._moveit_busy = True
@@ -2433,16 +2506,20 @@ class MoveItGoalCommander(Node):
             "关节角抓取上抬/下降预规划："
             f"末端中点=({midpoint[0]:+.4f}, {midpoint[1]:+.4f}, {midpoint[2]:+.4f}) m，"
             f"保持实际左右末端相对偏移，lift_z={lift_z:+.3f} m，"
-            f"上抬/下降/前推分别 {lift_steps}/{place_steps}/{actual_push_steps} 个 waypoint，"
-            f"post_place_push_x={push_x:+.3f} m。"
+            f"上抬/下降/前推/回撤下放分别 {lift_steps}/{place_steps}/{actual_push_steps}/{actual_lower_steps} 个 waypoint，"
+            f"前推={push_x:+.3f}m，回撤={retract_x:.3f}m，"
+            f"外展={spread_y:.3f}m，下放={lower_z:.3f}m。"
         )
         self._request_next_cartesian_left_ik(plan)
 
     def _send_lift_and_cache_place_from_solutions(self, plan: dict, positions: List[List[float]]) -> None:
         lift_steps = int(plan.get("lift_steps", 0))
         push_steps = int(plan.get("push_steps", 0))
-        place_end = len(positions) - push_steps
-        if lift_steps <= 0 or place_end <= lift_steps or place_end > len(positions):
+        lower_steps = int(plan.get("lower_steps", 0))
+        lower_start = len(positions) - lower_steps
+        place_end = lower_start - push_steps
+        if (lift_steps <= 0 or push_steps < 0 or lower_steps < 0
+                or place_end <= lift_steps or place_end > lower_start):
             self.get_logger().error("箱体放置预规划结果无效：无法分离上抬/下降轨迹。")
             self._publish_status("both_arms 失败：预规划放置轨迹分段无效", "both_arms")
             self._moveit_busy = False
@@ -2454,22 +2531,26 @@ class MoveItGoalCommander(Node):
         ]
         push_positions = (
             [list(positions[place_end - 1])] + [list(point) for point in positions[place_end:]]
-            if push_steps > 0
+            if push_steps + lower_steps > 0
             else []
+        )
+        tail_keys = tuple(
+            key for key, steps in (("push", push_steps), ("post_push_lower", lower_steps))
+            if steps > 0
         )
         self.get_logger().info(
             f"箱体上抬/下降轨迹分段：total_points={len(positions)}, "
             f"lift_steps={lift_steps}, place_points={len(place_positions)}, "
-            f"push_points={len(push_positions)}。"
+            f"push_steps={push_steps}, lower_steps={lower_steps}, tail_points={len(push_positions)}。"
         )
         if len(place_positions) < 2:
             self.get_logger().error("箱体放置预规划结果无效：缓存下降轨迹点不足。")
             self._publish_status("both_arms 失败：缓存下降轨迹点不足", "both_arms")
             self._moveit_busy = False
             return
-        if push_steps > 0 and len(push_positions) < 2:
-            self.get_logger().error("箱体放置预规划结果无效：缓存放置后前推轨迹点不足。")
-            self._publish_status("both_arms 失败：缓存放置后前推轨迹点不足", "both_arms")
+        if tail_keys and len(push_positions) < 2:
+            self.get_logger().error("箱体放置预规划结果无效：缓存放置后续轨迹点不足。")
+            self._publish_status("both_arms 失败：缓存放置后续轨迹点不足", "both_arms")
             self._moveit_busy = False
             return
 
@@ -2482,35 +2563,40 @@ class MoveItGoalCommander(Node):
                         ("place", positions[lift_steps:place_end], lift_steps),
                     ]
                     if push_steps:
-                        segments.append(("push", positions[place_end:], place_end))
+                        segments.append(("push", positions[place_end:lower_start], place_end))
+                    if lower_steps:
+                        segments.append(("post_push_lower", positions[lower_start:], lower_start))
                     for key, points, start_index in segments:
                         self._cache_movel_line(
                             key, plan, points, len(points), waypoint_start_index=start_index
                         )
                 except ValueError as exc:
-                    for key in (cache_key, "place", "push"):
+                    for key in (cache_key, "place", "push", "post_push_lower"):
                         self._cached_movel_samples.pop(key, None)
                     self._moveit_busy = False
-                    self.get_logger().error(f"箱体上抬/下降/前推 MoveL 预规划失败：{exc}")
+                    self.get_logger().error(f"箱体上抬/下降/前推/回撤下放 MoveL 预规划失败：{exc}")
                     self._publish_status(f"both_arms 失败：箱体 MoveL {exc}", "both_arms")
                     return
             self._cached_named_trajectories[cache_key] = lift_positions
             self._cached_named_place_trajectories[cache_key] = place_positions
             if push_positions:
                 self._cached_named_push_trajectories[cache_key] = push_positions
+                self._cached_named_tail_segment_keys[cache_key] = tail_keys
             else:
                 self._cached_named_push_trajectories.pop(cache_key, None)
+                self._cached_named_tail_segment_keys.pop(cache_key, None)
             self._cached_object_place_positions = place_positions
             self._cached_object_place_ready = False
             self._cached_object_place_pending_lift = False
             self._cached_object_push_positions = push_positions or None
+            self._cached_object_tail_segment_keys = tail_keys
             self._cached_object_push_ready = False
             self._cached_object_push_pending_place = False
             self._moveit_busy = False
             self.get_logger().info(
                 f"箱体上抬/下降 waypoint IK 全部成功，已缓存上抬 cache_key={cache_key}, "
                 f"lift_points={len(lift_positions)}，下降 place_points={len(place_positions)}，"
-                f"放置后前推 push_points={len(push_positions)}。"
+                f"放置后续 tail_points={len(push_positions)}，阶段={tail_keys}。"
             )
             self._publish_status(f"both_arms 预规划成功：{cache_key}", "both_arms")
             return
@@ -2519,6 +2605,7 @@ class MoveItGoalCommander(Node):
         self._cached_object_place_ready = False
         self._cached_object_place_pending_lift = True
         self._cached_object_push_positions = push_positions or None
+        self._cached_object_tail_segment_keys = tail_keys
         self._cached_object_push_ready = False
         self._cached_object_push_pending_place = False
         self.get_logger().info(
@@ -2557,11 +2644,12 @@ class MoveItGoalCommander(Node):
             self._cached_object_push_positions = (
                 [list(point) for point in push_positions] if push_positions else None
             )
+            self._cached_object_tail_segment_keys = self._cached_named_tail_segment_keys.get(cache_key, ())
             self._cached_object_push_ready = False
             self._cached_object_push_pending_place = False
             self.get_logger().info(
                 f"恢复 lift_place 缓存：lift_points={len(positions)}, place_points={len(place_positions)}, "
-                f"push_points={len(push_positions) if push_positions else 0}。"
+                f"tail_points={len(push_positions) if push_positions else 0}。"
             )
         if self._movel_enabled() and cache_key in ("grasp", "lift_place"):
             if cache_key not in self._cached_movel_samples:
@@ -2785,16 +2873,18 @@ class MoveItGoalCommander(Node):
             raise ValueError(f"无法执行缓存放置轨迹：{exc}") from exc
 
         if combine_push and not self._cached_object_push_positions:
-            raise ValueError("请求合并下降和前推，但没有缓存前推轨迹。")
+            raise ValueError("请求合并下降和放置后续动作，但没有缓存后续轨迹。")
+        if combine_push and not self._cached_object_tail_segment_keys:
+            raise ValueError("缓存放置后续动作缺少分段信息，请重新预规划。")
         if combine_push:
             push = self._cached_object_push_positions
             if max(abs(a - b) for a, b in zip(cached[-1], push[0])) > 1e-5:
-                raise ValueError("缓存下降终点与前推起点不连续，拒绝合并执行。")
+                raise ValueError("缓存下降终点与放置后续起点不连续，拒绝合并执行。")
             cached.extend([list(point) for point in push[1:]])
-        movel_keys = ("place", "push") if combine_push else ("place",)
+        movel_keys = ("place",) + self._cached_object_tail_segment_keys if combine_push else ("place",)
         use_movel = self._movel_enabled()
         if use_movel and any(key not in self._cached_movel_samples for key in movel_keys):
-            raise ValueError("缺少下放或前推 MoveL 缓存，请重新预规划。")
+            raise ValueError("缺少下放或放置后续 MoveL 缓存，请重新预规划。")
         if combine_push:
             self._cached_object_push_positions = None
 
@@ -2806,10 +2896,12 @@ class MoveItGoalCommander(Node):
         self._moveit_busy = True
         self.get_logger().info(
             f"收到缓存放置执行请求：当前状态与缓存上抬终点最大误差 {max_error:.4f} rad，"
-            f"开始执行{'下降+前推' if combine_push else '下降'}"
+            f"开始执行{'下降+' + self._tail_motion_label(self._cached_object_tail_segment_keys) if combine_push else '下降'}"
             f"{'MoveL' if use_movel else 'Ruckig'} 轨迹。"
         )
-        label = "双臂缓存放置下降+前推" if combine_push else "双臂缓存放置下降"
+        label = "双臂缓存放置下降" + (
+            "+" + self._tail_motion_label(self._cached_object_tail_segment_keys) if combine_push else ""
+        )
         if use_movel:
             self._send_cached_movel_segments(
                 movel_keys, label, [], start_already_checked=True,
@@ -2833,7 +2925,7 @@ class MoveItGoalCommander(Node):
     def _send_cached_object_push_trajectory(self) -> None:
         if not self._cached_object_push_positions or not self._cached_object_push_ready:
             raise ValueError(
-                "没有可执行的缓存放置后前推轨迹，请先完成整段预规划，并确认下降执行成功。"
+                "没有可执行的缓存放置后续轨迹，请先完成整段预规划，并确认下降执行成功。"
             )
         both_arm = self.arms["both_arms"]
         cached = [list(point) for point in self._cached_object_push_positions]
@@ -2845,22 +2937,23 @@ class MoveItGoalCommander(Node):
                 reject_prefix="当前关节偏离缓存下降终点过大",
             )
         except ValueError as exc:
-            raise ValueError(f"无法执行缓存放置后前推轨迹：{exc}") from exc
+            raise ValueError(f"无法执行缓存放置后续轨迹：{exc}") from exc
 
         use_movel = self._movel_enabled()
-        if use_movel and "push" not in self._cached_movel_samples:
-            raise ValueError("缺少前推 MoveL 缓存，请重新预规划。")
+        if use_movel and any(key not in self._cached_movel_samples for key in self._cached_object_tail_segment_keys):
+            raise ValueError("缺少放置后续 MoveL 缓存，请重新预规划。")
+        label = "双臂缓存放置后" + self._tail_motion_label(self._cached_object_tail_segment_keys)
         self._cached_object_push_positions = None
         self._cached_object_push_ready = False
         self._cached_object_push_pending_place = False
         self._moveit_busy = True
         self.get_logger().info(
-            f"收到缓存放置后前推执行请求：当前状态与缓存下降终点最大误差 {max_error:.4f} rad，"
-            f"开始执行前推{'MoveL' if use_movel else 'Ruckig'}轨迹。"
+            f"收到缓存放置后续执行请求：当前状态与缓存下降终点最大误差 {max_error:.4f} rad，"
+            f"开始执行{label}{'MoveL' if use_movel else 'Ruckig'}轨迹。"
         )
         if use_movel:
             self._send_cached_movel_segments(
-                ("push",), "双臂缓存放置后前推", [], start_already_checked=True,
+                self._cached_object_tail_segment_keys, label, [], start_already_checked=True,
                 goal_position_tolerance=float(self.get_parameter("cached_push_goal_tolerance").value),
             )
             return
@@ -2870,11 +2963,16 @@ class MoveItGoalCommander(Node):
             start_from_first_point=not bool(
                 self.get_parameter("cached_trajectory_start_blend_enabled").value
             ),
-            result_label="双臂缓存放置后前推",
+            result_label=label,
             goal_position_tolerance=float(
                 self.get_parameter("cached_push_goal_tolerance").value
             ),
         )
+
+    @staticmethod
+    def _tail_motion_label(keys: tuple[str, ...]) -> str:
+        names = {"push": "前推", "post_push_lower": "回撤下放"}
+        return "+".join(names[key] for key in keys)
 
     def _object_path_start_pose(self, requested_object_pose: PoseStamped, frame_id: str) -> Optional[PoseStamped]:
         mode = str(self.get_parameter("object_path_start_mode").value).strip().lower()
@@ -2884,7 +2982,7 @@ class MoveItGoalCommander(Node):
             start.header.stamp = self.get_clock().now().to_msg()
             self.get_logger().info(
                 "箱体路径起点使用请求中的 object pose，不再从左右末端反推箱体中心；"
-                "上抬/下降将按给定箱体位置生成刚体路径，配置后再追加放置后 x 方向前推。"
+                "上抬/下降按给定箱体位置生成刚体路径，随后追加前推和左右末端回撤下放。"
             )
             return start
         return self._estimate_current_object_pose_from_tools(frame_id)
@@ -3584,16 +3682,16 @@ class MoveItGoalCommander(Node):
                 "planning_succeeded",
                 plan=plan,
                 outcome="ok",
-                message="上抬/下降/放置后前推全部 waypoint IK 成功",
+                message="上抬/下降/前推/回撤下放全部 waypoint IK 成功",
                 trajectory_point_count=len(positions),
             )
             if plan.get("plan_only"):
                 self.get_logger().info(
-                    "箱体预规划上抬/下降/放置后前推 waypoint IK 全部成功，开始拆分并缓存各段轨迹。"
+                    "箱体预规划上抬/下降/前推/回撤下放 waypoint IK 全部成功，开始拆分并缓存各段轨迹。"
                 )
             else:
                 self.get_logger().info(
-                    "箱体预规划上抬/下降/放置后前推 waypoint IK 全部成功，开始缓存后续段并执行上抬。"
+                    "箱体预规划上抬/下降/前推/回撤下放 waypoint IK 全部成功，开始缓存后续段并执行上抬。"
                 )
             self._send_lift_and_cache_place_from_solutions(plan, positions)
             return

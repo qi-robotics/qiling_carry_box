@@ -3,7 +3,10 @@ from types import SimpleNamespace
 from qi_robot_moveit_py.vision_grasp_sequence import VisionGraspSequence
 
 
-def _place_sequence_events(*, combined: bool, push_succeeds: bool = True, home_succeeds: bool = True):
+def _place_sequence_events(
+    *, combined: bool, push_succeeds: bool = True, home_succeeds: bool = True,
+    push_x: float = 0.10, retract: bool = True,
+):
     events = []
 
     def motion(name, succeeds=True):
@@ -12,7 +15,11 @@ def _place_sequence_events(*, combined: bool, push_succeeds: bool = True, home_s
 
     fake = SimpleNamespace(
         combined_task_trajectories=combined,
-        post_place_push_x=0.10,
+        post_place_push_x=push_x,
+        post_place_tail_enabled=retract,
+        post_place_retract_x=0.03 if retract else 0.0,
+        post_place_spread_y=0.02 if retract else 0.0,
+        post_place_lower_z=0.02 if retract else 0.0,
         place_ik_seed_preset="place",
         allow_contact_motion_timeout=True,
         frame_id="base_link",
@@ -46,3 +53,9 @@ def test_failed_push_does_not_publish_place_success():
     result, events = _place_sequence_events(combined=False, push_succeeds=False)
     assert not result
     assert events == ["place", "push"]
+
+
+def test_retract_without_push_runs_before_release():
+    result, events = _place_sequence_events(combined=False, push_x=0.0)
+    assert result
+    assert events == ["place", "push", "place success", "hand", "home", "hand"]

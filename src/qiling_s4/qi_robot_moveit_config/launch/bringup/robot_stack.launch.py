@@ -74,7 +74,7 @@ def generate_launch_description():
             DeclareLaunchArgument("use_rviz", default_value="false"),
             DeclareLaunchArgument("rviz_delay", default_value="3.0"),
             DeclareLaunchArgument("object_cartesian_waypoint_count", default_value="10"),
-            DeclareLaunchArgument("object_roundtrip_lift_z", default_value="0.10"),
+            DeclareLaunchArgument("object_roundtrip_lift_z", default_value="0.05"),
             DeclareLaunchArgument("object_roundtrip_hold_sec", default_value="2.0"),
             DeclareLaunchArgument("direct_motion_duration", default_value="5.0"),
             DeclareLaunchArgument("direct_sample_period", default_value="0.02"),
@@ -145,6 +145,9 @@ def generate_launch_description():
             DeclareLaunchArgument("lift_z", default_value="0.20"),
             DeclareLaunchArgument("carry_x_offset", default_value="-0.07"),
             DeclareLaunchArgument("post_place_push_x", default_value="0.10"),
+            DeclareLaunchArgument("post_place_retract_x", default_value="0.03"),
+            DeclareLaunchArgument("post_place_spread_y", default_value="0.02"),
+            DeclareLaunchArgument("post_place_lower_z", default_value="0.02"),
             DeclareLaunchArgument("left_orientation_rpy_offset", default_value="-0.2,0.25,-0.3"),
             DeclareLaunchArgument("right_orientation_rpy_offset", default_value="0.2,0.25,0.3"),
             DeclareLaunchArgument("object_orientation_xyzw", default_value="0.0,0.0,0.0,1.0"),
@@ -341,6 +344,9 @@ def generate_launch_description():
                     ),
                     "carry_x_offset": LaunchConfiguration("carry_x_offset"),
                     "post_place_push_x": LaunchConfiguration("post_place_push_x"),
+                    "post_place_retract_x": LaunchConfiguration("post_place_retract_x"),
+                    "post_place_spread_y": LaunchConfiguration("post_place_spread_y"),
+                    "post_place_lower_z": LaunchConfiguration("post_place_lower_z"),
                     "object_cartesian_waypoint_count": LaunchConfiguration("object_cartesian_waypoint_count"),
                     "object_roundtrip_lift_z": LaunchConfiguration("object_roundtrip_lift_z"),
                     "object_roundtrip_hold_sec": LaunchConfiguration("object_roundtrip_hold_sec"),
@@ -389,6 +395,15 @@ def generate_launch_description():
                         "carry_x_offset": ParameterValue(LaunchConfiguration("carry_x_offset"), value_type=float),
                         "post_place_push_x": ParameterValue(
                             LaunchConfiguration("post_place_push_x"), value_type=float
+                        ),
+                        "post_place_retract_x": ParameterValue(
+                            LaunchConfiguration("post_place_retract_x"), value_type=float
+                        ),
+                        "post_place_spread_y": ParameterValue(
+                            LaunchConfiguration("post_place_spread_y"), value_type=float
+                        ),
+                        "post_place_lower_z": ParameterValue(
+                            LaunchConfiguration("post_place_lower_z"), value_type=float
                         ),
                         "left_orientation_xyzw": LaunchConfiguration("left_orientation_xyzw"),
                         "right_orientation_xyzw": LaunchConfiguration("right_orientation_xyzw"),
