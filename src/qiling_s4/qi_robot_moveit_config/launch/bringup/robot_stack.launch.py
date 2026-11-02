@@ -130,15 +130,15 @@ def generate_launch_description():
             DeclareLaunchArgument("visual_fixed_y", default_value="0.0"),
             DeclareLaunchArgument("visual_fixed_z", default_value="0.055"),
             DeclareLaunchArgument("joint_state_topic", default_value="/joint_states"),
-            # The installed SDK subscribes to rt/lowcmd and merges mode_ctrl=5 arms with policy legs.
+            # The installed SDK subscribes to rt/lowcmd and merges mode_ctrl=0 arms with policy legs.
             DeclareLaunchArgument(
                 "lowcmd_topic",
-                default_value="lowcmd",
+                default_value="lowcmd_arms",
                 description="SDK main LowCmd topic (ROS name; DDS rt/lowcmd).",
             ),
             DeclareLaunchArgument(
                 "lowcmd_mode_ctrl",
-                default_value="5",
+                default_value="0",
                 description="SDK arm and policy-leg merge mode on rt/lowcmd.",
             ),
             DeclareLaunchArgument("body_dof", default_value="26"),

@@ -15,10 +15,10 @@ Group=coral
 WorkingDirectory=/home/coral/project/qiling_carry_box
 
 Environment="RMW_IMPLEMENTATION=rmw_cyclonedds_cpp"
-# 当前 robot_stack 使用 ROS domain 22
-Environment="ROS_DOMAIN_ID=22"
-# 沿用旧 qiling_s4 自启服务的配置；该文件与当前 SDK 均使用 enp6s0
-Environment="CYCLONEDDS_URI=/home/coral/dds/cyclonedds.xml"
+# 当前 robot_stack 使用 ROS domain 21
+Environment="ROS_DOMAIN_ID=21"
+# 沿用旧 qiling_s4 自启服务的配置；该文件与当前 SDK 均使用 enp8s0
+Environment="CYCLONEDDS_URI=file:///home/coral/qi_deploy_igh_release/config/dds/cyclonedds_enp8s0.xml"
 
 # 可选参数
 Environment="DEPLOY_SETTLE_SECONDS=30"
