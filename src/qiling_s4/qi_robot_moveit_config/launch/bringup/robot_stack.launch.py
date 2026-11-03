@@ -74,7 +74,7 @@ def generate_launch_description():
             DeclareLaunchArgument("use_rviz", default_value="false"),
             DeclareLaunchArgument("rviz_delay", default_value="3.0"),
             DeclareLaunchArgument("object_cartesian_waypoint_count", default_value="10"),
-            DeclareLaunchArgument("object_roundtrip_lift_z", default_value="0.10"),
+            DeclareLaunchArgument("object_roundtrip_lift_z", default_value="0.08"),
             DeclareLaunchArgument("object_roundtrip_hold_sec", default_value="2.0"),
             DeclareLaunchArgument("direct_motion_duration", default_value="5.0"),
             DeclareLaunchArgument("direct_sample_period", default_value="0.02"),
@@ -110,8 +110,8 @@ def generate_launch_description():
             DeclareLaunchArgument("cached_trajectory_start_blend_enabled", default_value="true"),
             DeclareLaunchArgument("object_to_left_tool_xyz", default_value="0.01,0.180,0.08"),
             DeclareLaunchArgument("object_to_right_tool_xyz", default_value="0.01,-0.180,0.08"),
-            DeclareLaunchArgument("left_grasp_delta_xyz", default_value="0.0,-0.03,-0.04"),
-            DeclareLaunchArgument("right_grasp_delta_xyz", default_value="-0.02,0.03,-0.06"),
+            DeclareLaunchArgument("left_grasp_delta_xyz", default_value="-0.05,-0.02,-0.0"),
+            DeclareLaunchArgument("right_grasp_delta_xyz", default_value="-0.03,0.02,-0.01"),
             DeclareLaunchArgument("object_to_tool_orientation_mode", default_value="from_tool_orientation"),
             DeclareLaunchArgument("left_orientation_xyzw", default_value="-0.5,0.5,-0.5,0.5"),
             DeclareLaunchArgument("right_orientation_xyzw", default_value="0.5,0.5,0.5,0.5"),
@@ -130,11 +130,11 @@ def generate_launch_description():
             DeclareLaunchArgument("visual_fixed_y", default_value="0.0"),
             DeclareLaunchArgument("visual_fixed_z", default_value="0.055"),
             DeclareLaunchArgument("joint_state_topic", default_value="/joint_states"),
-            # The installed SDK subscribes to rt/lowcmd and merges mode_ctrl=0 arms with policy legs.
+            # The installed SDK subscribes to rt/lowcmd_arms and merges mode_ctrl=0 arms with policy legs.
             DeclareLaunchArgument(
                 "lowcmd_topic",
                 default_value="lowcmd_arms",
-                description="SDK main LowCmd topic (ROS name; DDS rt/lowcmd).",
+                description="SDK main LowCmd topic (ROS name; DDS rt/lowcmd_arms).",
             ),
             DeclareLaunchArgument(
                 "lowcmd_mode_ctrl",
