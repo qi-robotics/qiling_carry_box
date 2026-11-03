@@ -442,6 +442,8 @@ class VisionGraspSequence(Node):
             box_pose = self._constrain_visual_box_pose(box_pose)
             if box_pose is None:
                 return False
+        if not self._send_hands_command(grasp=True, step1_only=True):
+            return False
         self._publish_status("grasp", "detect", "ok",
                              f"物块位姿 xyz=({box_pose.position.x:.3f},{box_pose.position.y:.3f},{box_pose.position.z:.3f})")
 
@@ -1904,7 +1906,9 @@ class VisionGraspSequence(Node):
         command.timestamp = int(self.get_clock().now().nanoseconds)
         self.hands_cmd_pub.publish(command)
 
-    def _send_hands_command(self, *, grasp: bool, force_right_resend: bool = False) -> bool:
+    def _send_hands_command(
+        self, *, grasp: bool, force_right_resend: bool = False, step1_only: bool = False
+    ) -> bool:
         if not self.enable_hand_control:
             self.get_logger().info("enable_hand_control=false，跳过灵巧手控制。")
             return True
@@ -1919,13 +1923,13 @@ class VisionGraspSequence(Node):
         if grasp:
             left_durations = self.left_hand_grasp_durations
             right_durations = self.right_hand_grasp_durations
-            wait_sec = self.hand_grasp_wait_sec
+            wait_sec = 0.0 if step1_only else self.hand_grasp_wait_sec
             action = "闭合"
             # Two-step grasp: first close four fingers (thumb stays open), then close thumb.
             step1_left = self.left_hand_grasp_step1_positions
             step1_right = self.right_hand_grasp_step1_positions
-            step2_left = self.left_hand_grasp_positions
-            step2_right = self.right_hand_grasp_positions
+            step2_left = None if step1_only else self.left_hand_grasp_positions
+            step2_right = None if step1_only else self.right_hand_grasp_positions
         else:
             left_durations = self.left_hand_release_durations
             right_durations = self.right_hand_release_durations
