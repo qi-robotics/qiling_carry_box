@@ -76,7 +76,7 @@ class VisionGraspSequence(Node):
         self.declare_parameter("frame_id", "base_link")
         self.declare_parameter("visual_x_only_enabled", False)
         self.declare_parameter("visual_x_min", 0.43)
-        self.declare_parameter("visual_x_max", 0.57)
+        self.declare_parameter("visual_x_max", 0.45)
         self.declare_parameter("visual_fixed_y", 0.0)
         self.declare_parameter("visual_fixed_z", 0.5)
         self.declare_parameter("approach_x_offset", -0.05)
@@ -744,7 +744,7 @@ class VisionGraspSequence(Node):
         constrained.position.z = self.visual_fixed_z
         self.get_logger().info(
             "视觉抓取仅采用 x 坐标："
-            f"detected_x={detected_x:.3f}, constrained_x={constrained.position.x:.3f}, "
+            f"detected_x={detected_x:.4f}, constrained_x={constrained.position.x:.4f}, "
             f"fixed_y={constrained.position.y:.3f}, fixed_z={constrained.position.z:.3f}"
         )
         self._publish_status("grasp", "detect", "info",

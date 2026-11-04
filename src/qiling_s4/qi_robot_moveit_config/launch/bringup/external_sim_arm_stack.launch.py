@@ -102,7 +102,7 @@ def generate_launch_description():
             DeclareLaunchArgument("grasp_result_topic", default_value="/vision_grasp/result"),
             DeclareLaunchArgument("visual_x_only_enabled", default_value="true"),
             DeclareLaunchArgument("visual_x_min", default_value="0.43"),
-            DeclareLaunchArgument("visual_x_max", default_value="0.48"),
+            DeclareLaunchArgument("visual_x_max", default_value="0.45"),
             DeclareLaunchArgument("visual_fixed_y", default_value="0.0"),
             DeclareLaunchArgument("visual_fixed_z", default_value="0.02"),
             DeclareLaunchArgument("both_pose_goal_mode", default_value="cartesian_direct"),

@@ -88,6 +88,9 @@ ros2 topic pub --once /vision_grasp/grasp_command std_msgs/msg/String \
   "{data: 'grasp 0.47 0.00 0.02'}"
 ```
 
+真机视觉抓取的箱体 X 范围为 0.43～0.45 m：低于下限时使用 0.43 m，范围内使用识别值，
+高于上限时使用 0.45 m。箱体 Y、Z 分别固定为 0 和 0.055 m。手动坐标入口直接使用请求值。
+
 调试得到一组可靠抓取关节角后，可以跳过箱体位置和抓取位姿 IK：
 
 ```bash
