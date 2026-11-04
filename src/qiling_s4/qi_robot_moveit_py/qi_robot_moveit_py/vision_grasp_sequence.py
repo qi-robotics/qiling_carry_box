@@ -90,7 +90,6 @@ class VisionGraspSequence(Node):
         self.declare_parameter("post_place_retract_x", 0.0)
         self.declare_parameter("post_place_spread_y", 0.0)
         self.declare_parameter("post_place_lower_z", 0.0)
-        self.declare_parameter("attach_wait_sec", 3.0)
         self.declare_parameter("service_timeout_sec", 30.0)
         self.declare_parameter("motion_timeout_sec", 45.0)
         self.declare_parameter("left_orientation_xyzw", "-0.5,0.5,-0.5,0.5")
@@ -213,7 +212,6 @@ class VisionGraspSequence(Node):
         self.post_place_tail_enabled = max(
             self.post_place_retract_x, self.post_place_spread_y, self.post_place_lower_z
         ) > 1.0e-6
-        self.attach_wait_sec = float(self.get_parameter("attach_wait_sec").value)
         self.service_timeout_sec = float(self.get_parameter("service_timeout_sec").value)
         self.motion_timeout_sec = float(self.get_parameter("motion_timeout_sec").value)
         self.left_orientation = self._orientation_with_rpy_offset(
@@ -535,14 +533,6 @@ class VisionGraspSequence(Node):
         if self.attach_after_grasp and not self.attach_on_grasp_start and not self._set_object_attach(True):
             return False
 
-        if self._object_attached:
-            self.get_logger().info(f"抓取段结束，吸附状态已设置，等待 {self.attach_wait_sec:.1f}s 后上抬。")
-        else:
-            self.get_logger().info(f"抓取段结束，等待 {self.attach_wait_sec:.1f}s 后上抬。")
-        end_time = time.monotonic() + self.attach_wait_sec
-        while rclpy.ok() and time.monotonic() < end_time:
-            time.sleep(0.05)
-
         object_carry = self._copy_pose(object_grasp)
         object_carry.position.x += self.carry_x_offset
         object_carry.position.z += self.lift_z
@@ -650,10 +640,6 @@ class VisionGraspSequence(Node):
 
         if (self.attach_on_grasp_start or self.attach_after_grasp) and not self._set_object_attach(True):
             return False
-        end_time = time.monotonic() + self.attach_wait_sec
-        while rclpy.ok() and time.monotonic() < end_time:
-            time.sleep(0.05)
-
         dummy = Pose()
         dummy.orientation.w = 1.0
         self._remember_place_context(dummy, dummy, dummy, dummy, dummy, dummy)
@@ -1925,11 +1911,9 @@ class VisionGraspSequence(Node):
             right_durations = self.right_hand_grasp_durations
             wait_sec = 0.0 if step1_only else self.hand_grasp_wait_sec
             action = "闭合"
-            # Two-step grasp: first close four fingers (thumb stays open), then close thumb.
-            step1_left = self.left_hand_grasp_step1_positions
-            step1_right = self.right_hand_grasp_step1_positions
-            step2_left = None if step1_only else self.left_hand_grasp_positions
-            step2_right = None if step1_only else self.right_hand_grasp_positions
+            stage = "step1" if step1_only else "最终握姿"
+            left_positions = self.left_hand_grasp_step1_positions if step1_only else self.left_hand_grasp_positions
+            right_positions = self.right_hand_grasp_step1_positions if step1_only else self.right_hand_grasp_positions
         else:
             left_durations = self.left_hand_release_durations
             right_durations = self.right_hand_release_durations
@@ -1946,36 +1930,19 @@ class VisionGraspSequence(Node):
                 )
             wait_sec = self.hand_release_wait_sec
             action = "张开"
-            step1_left = self.left_hand_release_positions
-            step1_right = self.right_hand_release_positions
-            step2_left = None  # single-step
-            step2_right = None
+            stage = "step1"
+            left_positions = self.left_hand_release_positions
+            right_positions = self.right_hand_release_positions
 
         self._publish_status("hand", "command", "info",
-                             f"灵巧手{action}开始 step1 left={step1_left} right={step1_right} durations={left_durations}")
+                             f"灵巧手{action}开始 {stage} left={left_positions} right={right_positions} durations={left_durations}")
 
-        self._publish_hands_msg(step1_left, step1_right, left_durations, right_durations)
+        self._publish_hands_msg(left_positions, right_positions, left_durations, right_durations)
         self.get_logger().info(
-            f"已发布双灵巧手{action} step1 到 {self.hands_cmd_topic}："
-            f"left(index={self.left_hand_array_index}, id={self.left_hand_id}, positions={step1_left}, durations={left_durations})；"
-            f"right(index={self.right_hand_array_index}, id={self.right_hand_id}, positions={step1_right}, durations={right_durations})"
+            f"已发布双灵巧手{action} {stage} 到 {self.hands_cmd_topic}："
+            f"left(index={self.left_hand_array_index}, id={self.left_hand_id}, positions={left_positions}, durations={left_durations})；"
+            f"right(index={self.right_hand_array_index}, id={self.right_hand_id}, positions={right_positions}, durations={right_durations})"
         )
-
-        if step2_left is not None:
-            step_delay = max(self.hand_grasp_step_delay_sec, 0.1)
-            self.get_logger().info(f"灵巧手{action} step1 完成，等待 {step_delay:.1f}s 后执行 step2。")
-            deadline = time.monotonic() + step_delay
-            while rclpy.ok() and time.monotonic() < deadline:
-                time.sleep(0.05)
-
-            self._publish_status("hand", "command", "info",
-                                 f"灵巧手{action} step2 left={step2_left} right={step2_right} durations={left_durations}")
-            self._publish_hands_msg(step2_left, step2_right, left_durations, right_durations)
-            self.get_logger().info(
-                f"已发布双灵巧手{action} step2 到 {self.hands_cmd_topic}："
-                f"left(index={self.left_hand_array_index}, id={self.left_hand_id}, positions={step2_left}, durations={left_durations})；"
-                f"right(index={self.right_hand_array_index}, id={self.right_hand_id}, positions={step2_right}, durations={right_durations})"
-            )
 
         if wait_sec > 0.01:
             self.get_logger().info(f"灵巧手{action}等待执行同步 {wait_sec:.2f}s。")
@@ -1983,10 +1950,8 @@ class VisionGraspSequence(Node):
             while rclpy.ok() and time.monotonic() < end_time:
                 time.sleep(0.05)
 
-        final_left = step2_left if step2_left is not None else step1_left
-        final_right = step2_right if step2_right is not None else step1_right
         self._publish_status("hand", "command", "ok",
-                             f"灵巧手{action}指令已发送（未验证到位） left={final_left} right={final_right}")
+                             f"灵巧手{action}指令已发送（未验证到位） left={left_positions} right={right_positions}")
         return True
 
     def _parse_optional_float_list_parameter(self, parameter_name: str, expected_size: int) -> list[float]:

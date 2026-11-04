@@ -119,9 +119,10 @@ lowcmd（真机/仿真）                 qi/msg/LowCmd
 /handsstate                           qi/msg/HandsState
 ```
 
-视觉或手动坐标抓取取得箱体坐标后，先发送一次 `grasp_step1_positions`；抓取点仍按原流程
-再次发送第一步姿态，等待 `hand_grasp_step_delay_sec` 后发送最终握姿。放置后张开灵巧手。
-关节角抓取入口仍在抓取点执行原有两步闭合。闭合/张开的左右 6 维位置、6 维执行时间、
+视觉或手动坐标抓取取得箱体坐标后，先发送一次 `grasp_step1_positions`；到达抓取点后只发送
+最终握姿。关节角抓取入口也在抓取点只发送最终握姿。`hand_grasp_step_delay_sec` 为兼容旧配置
+保留，当前抓取流程不再使用。最终握姿发送后等待 `hand_grasp_wait_sec`，然后开始上抬；
+仿真启用吸附时，会先等待吸附服务返回。放置后张开灵巧手。闭合/张开的左右 6 维位置、6 维执行时间、
 数组索引、`hand_id`、mode 和同步等待时间均由顶层 launch 参数配置；默认值是待调试
 占位值；张开位置默认六个通道均为 `255`。设置 `enable_hand_control:=false` 可临时
 恢复纯手臂流程。`/handscmd` 在 DDS 层对应 SDK 的 `rt/handscmd`。

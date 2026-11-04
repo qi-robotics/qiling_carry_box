@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from geometry_msgs.msg import Pose
 
 from qi_robot_moveit_py.vision_grasp_sequence import VisionGraspSequence
@@ -74,6 +75,14 @@ class _SequenceHarness:
         self.events.append("lift_preplan")
         return True
 
+    def _send_joint_prepare_lift_place_goal(self, *args, **kwargs):
+        self.events.append("lift_preplan")
+        return True
+
+    def _send_both_arm_joint_goal(self, *args, **kwargs):
+        self.events.append(("joint", kwargs))
+        return True
+
     def _grasp_prefix(self):
         return [[1.0], [2.0], [3.0]]
 
@@ -101,7 +110,63 @@ def test_failed_detection_does_not_send_hand_command():
     assert sequence.events == ["detect"]
 
 
-def test_first_step_only_and_existing_grasp_commands(monkeypatch):
+def test_manual_pose_sends_first_then_final_hand_pose():
+    sequence = _SequenceHarness()
+
+    assert not VisionGraspSequence.run_sequence(sequence, manual_box_pose=Pose())
+    hands = [event[1] for event in sequence.events if isinstance(event, tuple) and event[0] == "hands"]
+    assert hands == [{"grasp": True, "step1_only": True}, {"grasp": True}]
+
+
+def test_joint_grasp_sends_only_final_hand_pose():
+    sequence = _SequenceHarness()
+
+    assert not VisionGraspSequence.run_joint_grasp_sequence(sequence, [0.0] * 14)
+    hands = [event[1] for event in sequence.events if isinstance(event, tuple) and event[0] == "hands"]
+    assert hands == [{"grasp": True}]
+
+
+@pytest.mark.parametrize("joint_grasp", [False, True])
+@pytest.mark.parametrize("attach_enabled", [False, True])
+def test_lift_follows_final_hand_and_optional_attach_without_extra_wait(monkeypatch, joint_grasp, attach_enabled):
+    import qi_robot_moveit_py.vision_grasp_sequence as module
+
+    class NoWaitHarness(_SequenceHarness):
+        carry_x_offset = 0.0
+        lift_z = 0.1
+        wait_for_place_command = True
+        attach_after_grasp = False
+        _copy_pose = staticmethod(VisionGraspSequence._copy_pose)
+
+        def _set_object_attach(self, enabled):
+            self.events.append("attach")
+            return True
+
+        def _send_both_arm_object_prepare_place_goal(self, *args, **kwargs):
+            if kwargs.get("plan_only"):
+                self.events.append("lift_preplan")
+                return True
+            self.events.append("lift")
+            return False  # Stop before executing any lift.
+
+    def unexpected_sleep(seconds):
+        raise AssertionError(f"extra sleep before lift: {seconds}")
+
+    monkeypatch.setattr(module.rclpy, "ok", lambda: True)
+    monkeypatch.setattr(module.time, "sleep", unexpected_sleep)
+    sequence = NoWaitHarness()
+    sequence.attach_on_grasp_start = attach_enabled
+
+    if joint_grasp:
+        assert not VisionGraspSequence.run_joint_grasp_sequence(sequence, [0.0] * 14)
+    else:
+        assert not VisionGraspSequence.run_sequence(sequence)
+
+    final_hand = sequence.events.index(("hands", {"grasp": True}))
+    assert sequence.events[final_hand + 1:] == (["attach", "lift"] if attach_enabled else ["lift"])
+
+
+def test_first_step_and_final_grasp_are_each_sent_once(monkeypatch):
     import qi_robot_moveit_py.vision_grasp_sequence as module
 
     monkeypatch.setattr(module.rclpy, "ok", lambda: False)
@@ -130,4 +195,4 @@ def test_first_step_only_and_existing_grasp_commands(monkeypatch):
     assert commands == [([1] * 6, [2] * 6)]
     commands.clear()
     assert VisionGraspSequence._send_hands_command(hand, grasp=True)
-    assert commands == [([1] * 6, [2] * 6), ([3] * 6, [4] * 6)]
+    assert commands == [([3] * 6, [4] * 6)]
