@@ -22,6 +22,10 @@ class _SequenceHarness:
     precheck_grasp_ik_before_pregrasp = False
     combined_task_trajectories = True
     pregrasp_transition_joint_positions = [1.0]
+    pregrasp_middle_joint_positions = [2.0]
+    pregrasp_clearance_joint_positions = [3.0]
+    pregrasp_joint_positions = [4.0]
+    _grasp_prefix = VisionGraspSequence._grasp_prefix
     wait_grasp_result_before_attach = True
     wait_grasp_result_before_lift = True
     allow_contact_motion_timeout = True
@@ -83,9 +87,6 @@ class _SequenceHarness:
         self.events.append(("joint", kwargs))
         return True
 
-    def _grasp_prefix(self):
-        return [[1.0], [2.0], [3.0]]
-
     def _set_object_attach(self, enabled):
         return False  # Stop the harness after the final grasp command.
 
@@ -99,7 +100,7 @@ def test_detection_sends_first_hand_pose_before_planning_and_keeps_combined_path
     ]
     pose_calls = [event[1] for event in sequence.events if isinstance(event, tuple) and event[0] == "pose"]
     assert pose_calls[0]["plan_only"] is True
-    assert pose_calls[1]["joint_waypoints"] == [[1.0], [2.0], [3.0]]
+    assert pose_calls[1]["joint_waypoints"] == [[1.0], [2.0], [3.0], [4.0]]
     assert sequence.events[-1] == ("hands", {"grasp": True})
 
 
@@ -124,6 +125,28 @@ def test_joint_grasp_sends_only_final_hand_pose():
     assert not VisionGraspSequence.run_joint_grasp_sequence(sequence, [0.0] * 14)
     hands = [event[1] for event in sequence.events if isinstance(event, tuple) and event[0] == "hands"]
     assert hands == [{"grasp": True}]
+    joint_calls = [event[1] for event in sequence.events if isinstance(event, tuple) and event[0] == "joint"]
+    assert joint_calls[0]["joint_waypoints"] == [[1.0], [2.0], [3.0], [4.0]]
+
+
+@pytest.mark.parametrize("joint_grasp", [False, True])
+def test_separate_pregrasp_still_passes_lift_and_clearance_waypoints(joint_grasp):
+    sequence = _SequenceHarness()
+    sequence.combined_task_trajectories = False
+    if joint_grasp:
+        assert not VisionGraspSequence.run_joint_grasp_sequence(sequence, [0.0] * 14)
+    else:
+        assert not VisionGraspSequence.run_sequence(sequence)
+    joint_calls = [event[1] for event in sequence.events if isinstance(event, tuple) and event[0] == "joint"]
+    assert joint_calls[1]["joint_waypoints"] == [[2.0], [3.0]]
+
+
+def test_empty_optional_clearance_preserves_original_waypoint_order():
+    sequence = _SequenceHarness()
+    sequence.pregrasp_clearance_joint_positions = []
+    assert sequence._grasp_prefix() == [[1.0], [2.0], [4.0]]
+    sequence.pregrasp_middle_joint_positions = []
+    assert sequence._grasp_prefix(include_transition=False) == [[4.0]]
 
 
 @pytest.mark.parametrize("joint_grasp", [False, True])

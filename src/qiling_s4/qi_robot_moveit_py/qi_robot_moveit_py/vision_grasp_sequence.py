@@ -151,6 +151,7 @@ class VisionGraspSequence(Node):
             "0.9,-0.2,0.0,-1.9,0.0,0.0,0.0",
         )
         self.declare_parameter("pregrasp_middle_joint_positions", "")
+        self.declare_parameter("pregrasp_clearance_joint_positions", "")
         self.declare_parameter(
             "pregrasp_joint_positions",
             "0.0,0.1,0.0,-1.7,0.0,0.0,0.0,"
@@ -293,6 +294,9 @@ class VisionGraspSequence(Node):
         )
         self.pregrasp_middle_joint_positions = self._parse_optional_float_list_parameter(
             "pregrasp_middle_joint_positions", 14
+        )
+        self.pregrasp_clearance_joint_positions = self._parse_optional_float_list_parameter(
+            "pregrasp_clearance_joint_positions", 14
         )
         self.pregrasp_joint_positions = self._parse_float_list_parameter("pregrasp_joint_positions", 14)
         self.home_joint_positions = self._parse_float_list_parameter("home_joint_positions", 14)
@@ -505,7 +509,10 @@ class VisionGraspSequence(Node):
             if not self.combined_task_trajectories:
                 self.get_logger().info("开始发送预抓取关节角目标。")
                 self._publish_status("grasp", "motion", "info", "开始预抓取")
-                if not self._send_both_arm_joint_goal(self.pregrasp_joint_positions, "双臂预抓取"):
+                if not self._send_both_arm_joint_goal(
+                    self.pregrasp_joint_positions, "双臂预抓取",
+                    joint_waypoints=self._grasp_prefix(include_transition=False)[:-1],
+                ):
                     return False
                 self._publish_status("grasp", "motion", "ok", "预抓取完成")
 
@@ -623,7 +630,10 @@ class VisionGraspSequence(Node):
         if not self.combined_task_trajectories:
             self.get_logger().info("开始发送关节抓取预抓取点。")
             self._publish_status("grasp", "motion", "info", "开始关节抓取预抓取")
-            if not self._send_both_arm_joint_goal(self.pregrasp_joint_positions, "双臂关节抓取预抓取"):
+            if not self._send_both_arm_joint_goal(
+                self.pregrasp_joint_positions, "双臂关节抓取预抓取",
+                joint_waypoints=self._grasp_prefix(include_transition=False)[:-1],
+            ):
                 return False
             self._publish_status("grasp", "motion", "ok", "关节抓取预抓取完成")
         self.get_logger().info("开始发送调试得到的双臂抓取关节角。")
@@ -1232,12 +1242,14 @@ class VisionGraspSequence(Node):
             result.append(waypoint)
         return result
 
-    def _grasp_prefix(self) -> list[list[float]]:
+    def _grasp_prefix(self, *, include_transition: bool = True) -> list[list[float]]:
         points = []
-        if self.pregrasp_transition_joint_positions:
+        if include_transition and self.pregrasp_transition_joint_positions:
             points.append(self.pregrasp_transition_joint_positions)
         if self.pregrasp_middle_joint_positions:
             points.append(self.pregrasp_middle_joint_positions)
+        if self.pregrasp_clearance_joint_positions:
+            points.append(self.pregrasp_clearance_joint_positions)
         points.append(self.pregrasp_joint_positions)
         return points
 

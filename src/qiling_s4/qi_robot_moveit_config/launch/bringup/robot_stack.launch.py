@@ -174,9 +174,18 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "pregrasp_middle_joint_positions",
                 default_value=(
-                    "0.175,0.475,-0.095,-1.460,-0.325,-0.215,0.095,"
-                    "0.175,-0.475,-0.095,-1.460,0.325,-0.215,0.095"
+                    "0.351,0.587,-0.003,-1.808,-0.420,-0.040,0.021,"
+                    "0.351,-0.587,-0.003,-1.808,0.420,-0.040,0.021"
                 ),
+                description="Earlier hand lift before reaching over the table (14 joint angles, rad).",
+            ),
+            DeclareLaunchArgument(
+                "pregrasp_clearance_joint_positions",
+                default_value=(
+                    "-0.55,0.45,-0.34,-0.67,-0.65,-0.33,0.19,"
+                    "-0.55,-0.45,-0.34,-0.67,0.65,-0.33,0.19"
+                ),
+                description="Late clearance waypoint before the unchanged pregrasp pose; empty disables it.",
             ),
             DeclareLaunchArgument(
                 "pregrasp_joint_positions",
@@ -452,6 +461,9 @@ def generate_launch_description():
                         ),
                         "pregrasp_middle_joint_positions": LaunchConfiguration(
                             "pregrasp_middle_joint_positions"
+                        ),
+                        "pregrasp_clearance_joint_positions": LaunchConfiguration(
+                            "pregrasp_clearance_joint_positions"
                         ),
                         "pregrasp_joint_positions": LaunchConfiguration("pregrasp_joint_positions"),
                         "home_joint_positions": LaunchConfiguration("home_joint_positions"),
