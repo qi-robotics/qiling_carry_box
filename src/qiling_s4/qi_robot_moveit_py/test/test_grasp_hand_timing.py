@@ -8,6 +8,7 @@ from qi_robot_moveit_py.vision_grasp_sequence import VisionGraspSequence
 
 class _SequenceHarness:
     pose_source = "vision"
+    visual_grasp_use_x_midpoint = False
     visual_x_only_enabled = True
     frame_id = "base_link"
     approach_x_offset = 0.0
@@ -111,12 +112,48 @@ def test_failed_detection_does_not_send_hand_command():
     assert sequence.events == ["detect"]
 
 
+@pytest.mark.parametrize("success", [True, False])
+def test_midpoint_policy_continues_grasp_after_detection_response(success):
+    sequence = _SequenceHarness()
+    sequence.visual_grasp_use_x_midpoint = True
+    sequence.visual_x_min, sequence.visual_x_max = 0.43, 0.45
+    sequence.visual_fixed_y, sequence.visual_fixed_z = 0.0, 0.055
+    sequence.detect_service_name = "detect"
+    sequence.service_timeout_sec = 1.0
+    response = SimpleNamespace(success=success, message="test", box_pose=Pose())
+    sequence.detect_client = SimpleNamespace(call_async=lambda request: SimpleNamespace(result=lambda: response))
+    sequence._spin_until_future_done = lambda future, timeout: True
+    sequence._get_box_pose = lambda: VisionGraspSequence._detect_box_pose(sequence)
+    sequence._build_arm_poses = lambda pose: (
+        sequence.events.append(("box", pose.position.x, pose.position.y, pose.position.z)) or (Pose(), Pose())
+    )
+
+    assert not VisionGraspSequence.run_sequence(sequence)  # Harness stops after final hand pose.
+    assert ("box", 0.44, 0.0, 0.055) in sequence.events
+    assert "constrain" not in sequence.events
+    assert any(isinstance(event, tuple) and event[0] == "pose" for event in sequence.events)
+
+
 def test_manual_pose_sends_first_then_final_hand_pose():
     sequence = _SequenceHarness()
 
     assert not VisionGraspSequence.run_sequence(sequence, manual_box_pose=Pose())
     hands = [event[1] for event in sequence.events if isinstance(event, tuple) and event[0] == "hands"]
     assert hands == [{"grasp": True, "step1_only": True}, {"grasp": True}]
+
+
+def test_midpoint_policy_does_not_override_manual_pose():
+    sequence = _SequenceHarness()
+    sequence.visual_grasp_use_x_midpoint = True
+    pose = Pose()
+    pose.position.x, pose.position.y, pose.position.z = 0.51, 0.02, 0.03
+    sequence._build_arm_poses = lambda box: (
+        sequence.events.append(("box", box.position.x, box.position.y, box.position.z)) or (Pose(), Pose())
+    )
+
+    assert not VisionGraspSequence.run_sequence(sequence, manual_box_pose=pose)
+    assert ("box", 0.51, 0.02, 0.03) in sequence.events
+    assert "detect" not in sequence.events
 
 
 def test_joint_grasp_sends_only_final_hand_pose():

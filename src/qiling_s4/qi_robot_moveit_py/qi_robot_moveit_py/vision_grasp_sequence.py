@@ -74,6 +74,7 @@ class VisionGraspSequence(Node):
         self.declare_parameter("pose_source", "vision")
         self.declare_parameter("object_pose_topic", "/mujoco/object_pose")
         self.declare_parameter("frame_id", "base_link")
+        self.declare_parameter("visual_grasp_use_x_midpoint", True)
         self.declare_parameter("visual_x_only_enabled", False)
         self.declare_parameter("visual_x_min", 0.43)
         self.declare_parameter("visual_x_max", 0.45)
@@ -180,6 +181,7 @@ class VisionGraspSequence(Node):
         self.pose_source = str(self.get_parameter("pose_source").value).strip().lower()
         self.object_pose_topic = str(self.get_parameter("object_pose_topic").value)
         self.frame_id = str(self.get_parameter("frame_id").value)
+        self.visual_grasp_use_x_midpoint = bool(self.get_parameter("visual_grasp_use_x_midpoint").value)
         self.visual_x_only_enabled = bool(self.get_parameter("visual_x_only_enabled").value)
         self.visual_x_min = float(self.get_parameter("visual_x_min").value)
         self.visual_x_max = float(self.get_parameter("visual_x_max").value)
@@ -440,7 +442,8 @@ class VisionGraspSequence(Node):
         box_pose = manual_box_pose if manual_box_pose is not None else self._get_box_pose()
         if box_pose is None:
             return False
-        if manual_box_pose is None and self.pose_source == "vision" and self.visual_x_only_enabled:
+        if (manual_box_pose is None and self.pose_source == "vision"
+                and not self.visual_grasp_use_x_midpoint and self.visual_x_only_enabled):
             box_pose = self._constrain_visual_box_pose(box_pose)
             if box_pose is None:
                 return False
@@ -719,6 +722,20 @@ class VisionGraspSequence(Node):
             self.get_logger().error("视觉检测服务没有返回结果。")
             self._publish_status("grasp", "detect", "fail", "视觉检测服务没有返回结果")
             return None
+        if self.visual_grasp_use_x_midpoint:
+            pose = Pose()
+            pose.position.x = (self.visual_x_min + self.visual_x_max) / 2.0
+            pose.position.y = self.visual_fixed_y
+            pose.position.z = self.visual_fixed_z
+            pose.orientation.w = 1.0
+            result = "成功" if response.success else "失败"
+            message = (
+                f"视觉检测{result}：{response.message}；使用固定抓取基准 "
+                f"xyz=({pose.position.x:.3f}, {pose.position.y:.3f}, {pose.position.z:.3f})"
+            )
+            self.get_logger().info(message)
+            self._publish_status("grasp", "detect", "info", message)
+            return pose
         if not response.success:
             self.get_logger().error(f"视觉检测失败：{response.message}")
             self._publish_status("grasp", "detect", "fail", f"视觉检测失败：{response.message}")

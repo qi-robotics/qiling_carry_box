@@ -124,6 +124,7 @@ def generate_launch_description():
             DeclareLaunchArgument("place_command_topic", default_value="/vision_grasp/place_command"),
             DeclareLaunchArgument("status_topic", default_value="/vision_grasp/status"),
             DeclareLaunchArgument("grasp_result_topic", default_value="/vision_grasp/result"),
+            DeclareLaunchArgument("visual_grasp_use_x_midpoint", default_value="true"),
             DeclareLaunchArgument("visual_x_only_enabled", default_value="true"),
             DeclareLaunchArgument("visual_x_min", default_value="0.43"),
             DeclareLaunchArgument("visual_x_max", default_value="0.45"),
@@ -402,6 +403,9 @@ def generate_launch_description():
                         "status_topic": LaunchConfiguration("status_topic"),
                         "grasp_result_topic": LaunchConfiguration("grasp_result_topic"),
                         "pose_source": "vision",
+                        "visual_grasp_use_x_midpoint": ParameterValue(
+                            LaunchConfiguration("visual_grasp_use_x_midpoint"), value_type=bool
+                        ),
                         "visual_x_only_enabled": ParameterValue(
                             LaunchConfiguration("visual_x_only_enabled"), value_type=bool
                         ),

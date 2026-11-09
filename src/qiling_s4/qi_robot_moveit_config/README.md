@@ -37,6 +37,20 @@ SDK 在同一 rt/lowcmd 上融合 mode_ctrl=5 的上肢目标与策略腿
 MoveIt 仍能处理机器人自身碰撞及外部发布的规划场景碰撞物体，但不会从深度图或点云
 自动构建周围障碍物。接入 3D 传感器时，需要更新该配置。
 
+## 视觉抓取位置策略
+
+在 `launch/bringup/robot_stack.launch.py` 中设置 `visual_grasp_use_x_midpoint`，默认
+为 `true`。该模式下仍会调用 `detect` 服务；只要服务返回响应，无论 `success` 为真或假，
+都使用固定箱体位置：`x = (visual_x_min + visual_x_max) / 2`，`y = visual_fixed_y`，
+`z = visual_fixed_z`。当前默认值为 `(0.44, 0.0, 0.055)` m，位于 `base_link` 坐标系。
+检测消息和成功/失败状态会记录在日志中；固定位置用于规划，不代表箱体实际在该位置。
+服务不可用、调用超时或没有响应时仍会停止。后续 IK 及轨迹检查仍按原流程进行。
+
+设为 `false` 时恢复原视觉策略：检测失败则停止；检测成功且
+`visual_x_only_enabled=true` 时，X 限制在 `[visual_x_min, visual_x_max]`，Y、Z 使用固定值。
+手动 `grasp x y z`、`grasp_joints ...` 和 MuJoCo 物块位姿入口不受此开关影响。
+该参数由节点启动时读取，修改启动文件后须重新启动节点。
+
 ## 预抓取前的抬手与避桌点
 
 真机参数位于 `launch/bringup/robot_stack.launch.py`。默认路径为：
