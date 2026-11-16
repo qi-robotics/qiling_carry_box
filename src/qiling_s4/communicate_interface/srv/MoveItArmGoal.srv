@@ -10,6 +10,7 @@ int8 COMMAND_OBJECT_PREPARE_PLACE = 5
 int8 COMMAND_OBJECT_EXECUTE_PLACE = 6
 int8 COMMAND_JOINT_PREPARE_LIFT_PLACE = 7
 int8 COMMAND_OBJECT_EXECUTE_PUSH = 8
+int8 COMMAND_CARTESIAN_Z = 9
 
 # Select which arm(s) to command.
 int8 target
@@ -32,6 +33,11 @@ string cache_key
 
 # Per-request Cartesian IK continuity limit (rad). <= 0 uses the node default.
 float64 max_joint_step
+
+# Signed translation in reference_frame metres for COMMAND_CARTESIAN_Z.
+float64 cartesian_delta_z
+# Symmetric Y displacement: left +spread, right -spread, in metres.
+float64 cartesian_spread_y
 
 # Pose targets are interpreted as tool-frame targets.
 # For TARGET_LEFT, fill left_pose.

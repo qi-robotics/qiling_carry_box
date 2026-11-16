@@ -10,7 +10,7 @@
 | `lowstate_joint_states_bridge` | 真机链路专用，将 `lowstate` 转成 `/joint_states` |
 | `lowcmd_joint_states_echo` | RViz-only 模式专用，将 `lowcmd` 回显成 `/joint_states` |
 
-> **当前抓取流程**：抓取闭手后原位等待 `place`；收到指令后原位张手，并经过 home 过渡点回 home。上抬、下降、前推和回撤下放均不再预规划或执行。下文与这些动作相关的旧说明不适用于当前流程。
+> **当前抓取流程**：到达抓取点后，双臂沿 `base_link` 的 Z 方向下降 `grasp_descent_z`，再闭手并等待 `place`；收到 `place` 后，同步上升 `place_ascent_z` 并向两侧各外展 `place_release_spread_y`，再张手并经过 home 过渡点回 home。各距离在真机 `robot_stack.launch.py` 中默认为 0.03 m，参数为非负值、设为 0 时跳过对应动作。每段使用当前关节状态计算工具位姿并保持姿态；失败时不会进入后续动作。下文关于旧版上抬、下降、前推和回撤下放的说明不适用于当前抓取流程。
 
 ## 启动方式
 

@@ -85,6 +85,9 @@ class VisionGraspSequence(Node):
         self.declare_parameter("approach_z_offset", 0.03)
         self.declare_parameter("left_grasp_delta_xyz", "0.0,0.0,0.0")
         self.declare_parameter("right_grasp_delta_xyz", "0.0,0.0,0.0")
+        self.declare_parameter("grasp_descent_z", 0.03)
+        self.declare_parameter("place_ascent_z", 0.03)
+        self.declare_parameter("place_release_spread_y", 0.03)
         self.declare_parameter("lift_z", 0.03)
         self.declare_parameter("carry_x_offset", 0.0)
         self.declare_parameter("post_place_push_x", 0.0)
@@ -202,6 +205,12 @@ class VisionGraspSequence(Node):
         ):
             if not all(math.isfinite(value) for value in values):
                 raise ValueError(f"{name} 必须是 3 个有限数值。")
+        self.grasp_descent_z = float(self.get_parameter("grasp_descent_z").value)
+        self.place_ascent_z = float(self.get_parameter("place_ascent_z").value)
+        self.place_release_spread_y = float(self.get_parameter("place_release_spread_y").value)
+        for name in ("grasp_descent_z", "place_ascent_z", "place_release_spread_y"):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) < 0.0:
+                raise ValueError(f"{name} 必须是非负的有限米数。")
         self.lift_z = float(self.get_parameter("lift_z").value)
         self.carry_x_offset = float(self.get_parameter("carry_x_offset").value)
         self.post_place_push_x = float(self.get_parameter("post_place_push_x").value)
@@ -512,15 +521,18 @@ class VisionGraspSequence(Node):
             left_grasp,
             right_grasp,
             "双臂抓取箱子",
-            wait_result=(self.wait_grasp_result_before_attach or self.wait_grasp_result_before_lift),
+            wait_result=True,
             collect_result=False,
-            allow_motion_timeout=self.allow_contact_motion_timeout,
+            allow_motion_timeout=False,
             use_cached_plan=True,
             cache_key="grasp",
             joint_waypoints=self._grasp_prefix() if self.combined_task_trajectories else (),
         ):
             return False
         self._publish_status("grasp", "motion", "ok", "抓取轨迹执行完成")
+
+        if not self._send_cartesian_z(-self.grasp_descent_z, "抓取点竖直下降"):
+            return False
 
         if not self._send_hands_command(grasp=True):
             return False
@@ -569,6 +581,9 @@ class VisionGraspSequence(Node):
         ):
             return False
         self._publish_status("grasp", "motion", "ok", "抓取关节角执行完成")
+
+        if not self._send_cartesian_z(-self.grasp_descent_z, "抓取点竖直下降"):
+            return False
 
         if not self._send_hands_command(grasp=True):
             return False
@@ -788,6 +803,31 @@ class VisionGraspSequence(Node):
             2.0 * (y * z - w * x),
             1.0 - 2.0 * (x * x + y * y),
         )
+
+    def _send_cartesian_z(self, delta_z: float, label: str, *, spread_y: float = 0.0) -> bool:
+        if max(abs(delta_z), abs(spread_y)) < 1e-9:
+            return True
+        request = MoveItArmGoal.Request()
+        request.target = MoveItArmGoal.Request.TARGET_BOTH
+        request.command_type = MoveItArmGoal.Request.COMMAND_CARTESIAN_Z
+        request.frame_id = self.frame_id
+        request.cartesian_delta_z = float(delta_z)
+        request.cartesian_spread_y = float(spread_y)
+        self._last_result = None
+        self._waiting_for_result = True
+        self._publish_status(self._current_action(), "motion", "info", f"{label}: dz={delta_z:+.3f} m, 左右外展={spread_y:.3f} m")
+        future = self.arm_goal_client.call_async(request)
+        if not self._spin_until_future_done(future, self.service_timeout_sec):
+            self._waiting_for_result = False
+            self._publish_status(self._current_action(), "motion", "fail", f"{label}服务超时")
+            return False
+        response = future.result()
+        if response is None or not response.accepted:
+            self._waiting_for_result = False
+            message = response.message if response is not None else "服务没有返回结果"
+            self._publish_status(self._current_action(), "motion", "fail", f"{label}未被接收：{message}")
+            return False
+        return self._wait_for_motion_result(label, allow_timeout_success=False)
 
     def _send_both_arm_pose_goal(
         self,
@@ -1192,8 +1232,12 @@ class VisionGraspSequence(Node):
         object_grasp: Optional[Pose] = None,
     ) -> bool:
         del left_lift, right_lift, left_grasp, right_grasp, object_grasp
-        self.get_logger().info("收到放置指令，原位张开灵巧手。")
-        self._publish_status("hand", "command", "info", "收到放置指令，原位张开灵巧手")
+        if not self._send_cartesian_z(
+            self.place_ascent_z, "放置前上升外展", spread_y=self.place_release_spread_y
+        ):
+            return False
+        self.get_logger().info("放置前上升外展完成，原位张开灵巧手。")
+        self._publish_status("hand", "command", "info", "放置前上升外展完成，原位张开灵巧手")
         if not self._send_hands_command(grasp=False):
             return False
 

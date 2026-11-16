@@ -101,11 +101,8 @@ def _minimum_height(geometry, positions):
     return min(heights)
 
 
-def test_path_visits_clearance_and_keeps_original_endpoint_within_joint_limits(path):
+def test_path_visits_all_waypoints_within_joint_limits(path):
     points, samples, urdf = path
-    expected_end = [-.55, .45, -.34, -.52, -.65, -.33, .19,
-                    -.55, -.45, -.34, -.52, .65, -.33, .19]
-    np.testing.assert_allclose(points[-1], expected_end, atol=1e-10)
     limits = [urdf.find(f"joint[@name='{name}']/limit") for name in NAMES]
     lower = [float(limit.get("lower")) for limit in limits]
     upper = [float(limit.get("upper")) for limit in limits]
@@ -121,9 +118,45 @@ def test_late_path_no_longer_dips_below_original_pregrasp_pinky_height(path, sid
     geometry = _pinky_geometry(urdf, side)
     start = next(i for i, sample in enumerate(samples)
                  if np.max(np.abs(np.array(sample[1]) - points[2])) < 1e-7)
+    original = np.array([-.55, .45, -.34, -.52, -.65, -.33, .19,
+                         -.55, -.45, -.34, -.52, .65, -.33, .19])
+    original_height = _minimum_height(geometry, original)
     endpoint_height = _minimum_height(geometry, points[-1])
-    assert endpoint_height > .09
-    assert _minimum_height(geometry, points[2]) > endpoint_height + .06
-    assert _minimum_height(geometry, points[3]) > endpoint_height + .05
+    assert endpoint_height > original_height + .04
+    assert _minimum_height(geometry, points[2]) > original_height + .06
+    assert _minimum_height(geometry, points[3]) > original_height + .05
     heights = [_minimum_height(geometry, sample[1]) for sample in samples[start:]]
-    assert min(heights) >= endpoint_height - 1e-4
+    assert min(heights) >= original_height - 1e-4
+
+
+def _tool_transform(urdf, side, positions):
+    joints = {joint.find("child").get("link"): joint for joint in urdf.findall("joint")}
+    name = f"{side}_hand_base_link"
+    chain = []
+    while name != "base_link":
+        joint = joints[name]
+        chain.append(joint)
+        name = joint.find("parent").get("link")
+    transform = np.eye(4)
+    for joint in reversed(chain):
+        transform = transform @ _origin(joint.find("origin"))
+        if joint.get("type") != "fixed":
+            rotation = np.eye(4)
+            axis = np.fromstring(joint.find("axis").get("xyz"), sep=" ")
+            rotation[:3, :3] = Rotation.from_rotvec(axis * positions[NAMES.index(joint.get("name"))]).as_matrix()
+            transform = transform @ rotation
+    offset = np.eye(4)
+    offset[2, 3] = 0.10
+    return transform @ offset
+
+
+@pytest.mark.parametrize("side", ["LH", "RH"])
+def test_pregrasp_tool_rises_five_cm_with_small_orientation_change(path, side):
+    points, _, urdf = path
+    original = np.array([-.55, .45, -.34, -.52, -.65, -.33, .19,
+                         -.55, -.45, -.34, -.52, .65, -.33, .19])
+    before = _tool_transform(urdf, side, original)
+    after = _tool_transform(urdf, side, points[-1])
+    np.testing.assert_allclose(after[:3, 3] - before[:3, 3], [-.01, 0, .05], atol=1e-4)
+    orientation_delta = Rotation.from_matrix(after[:3, :3] @ before[:3, :3].T).magnitude()
+    assert orientation_delta < np.deg2rad(3)

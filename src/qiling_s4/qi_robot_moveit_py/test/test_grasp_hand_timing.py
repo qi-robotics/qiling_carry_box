@@ -7,6 +7,9 @@ from qi_robot_moveit_py.vision_grasp_sequence import VisionGraspSequence
 
 
 class _SequenceHarness:
+    grasp_descent_z = 0.03
+    place_ascent_z = 0.03
+    place_release_spread_y = 0.03
     pose_source = "vision"
     visual_grasp_use_x_midpoint = False
     visual_x_only_enabled = True
@@ -46,6 +49,10 @@ class _SequenceHarness:
     def _constrain_visual_box_pose(self, pose):
         self.events.append("constrain")
         return pose
+
+    def _send_cartesian_z(self, delta_z, label, *, spread_y=0.0):
+        self.events.append(("z", delta_z, spread_y) if spread_y else ("z", delta_z))
+        return True
 
     def _send_hands_command(self, **kwargs):
         self.events.append(("hands", kwargs))
@@ -207,16 +214,19 @@ def test_grasp_waits_in_place_without_lift_planning(joint_grasp, attach_enabled)
     else:
         assert VisionGraspSequence.run_sequence(sequence)
     assert "lift_preplan" not in sequence.events
+    assert ("z", -0.03) in sequence.events
+    assert sequence.events.index(("z", -0.03)) < sequence.events.index(("hands", {"grasp": True}))
     final_hand = sequence.events.index(("hands", {"grasp": True}))
     assert sequence.events[final_hand + 1:] == (["attach", "waiting"] if attach_enabled else ["waiting"])
 
 
-def test_place_opens_hands_then_returns_home_without_cartesian_motion():
+def test_place_moves_up_and_out_before_opening_hands_and_returning_home():
     sequence = _SequenceHarness()
     sequence._should_release_attached_object = lambda: False
     sequence._send_home_joint_goal = lambda **kwargs: sequence.events.append(("home", kwargs)) or True
     assert VisionGraspSequence._run_place_sequence(sequence, Pose(), Pose(), Pose(), Pose())
     assert sequence.events == [
+        ("z", 0.03, 0.03),
         ("hands", {"grasp": False}),
         ("home", {"publish_place_success_on_second_transition_start": True}),
         ("hands", {"grasp": False, "force_right_resend": True}),
@@ -227,7 +237,7 @@ def test_place_does_not_return_home_if_opening_hands_fails():
     sequence = _SequenceHarness()
     sequence._send_hands_command = lambda **kwargs: False
     assert not VisionGraspSequence._run_place_sequence(sequence, Pose(), Pose(), Pose(), Pose())
-    assert sequence.events == []
+    assert sequence.events == [("z", 0.03, 0.03)]
 
 
 def test_first_step_and_final_grasp_are_each_sent_once(monkeypatch):
@@ -260,3 +270,21 @@ def test_first_step_and_final_grasp_are_each_sent_once(monkeypatch):
     commands.clear()
     assert VisionGraspSequence._send_hands_command(hand, grasp=True)
     assert commands == [([3] * 6, [4] * 6)]
+
+
+@pytest.mark.parametrize("joint_grasp", [False, True])
+def test_failed_descent_does_not_close_hands(joint_grasp):
+    sequence = _SequenceHarness()
+    sequence._send_cartesian_z = lambda delta, label, **kwargs: False
+    if joint_grasp:
+        assert not VisionGraspSequence.run_joint_grasp_sequence(sequence, [0.0] * 14)
+    else:
+        assert not VisionGraspSequence.run_sequence(sequence)
+    assert ("hands", {"grasp": True}) not in sequence.events
+
+
+def test_failed_place_ascent_does_not_release_or_return_home():
+    sequence = _SequenceHarness()
+    sequence._send_cartesian_z = lambda delta, label, **kwargs: False
+    assert not VisionGraspSequence._run_place_sequence(sequence, Pose(), Pose(), Pose(), Pose())
+    assert sequence.events == []

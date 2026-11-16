@@ -28,10 +28,10 @@ def _hand_launch_arguments():
         "left_hand_array_index": "0", "right_hand_array_index": "1",
         "left_hand_id": "0", "right_hand_id": "1", "hand_mode": "1",
         "hands_mode": "1", "hands_mode_ctrl": "5",
-        "left_hand_grasp_positions": "0,255,255,255,255,255",
-        "right_hand_grasp_positions": "0,255,255,255,255,255",
-        "left_hand_grasp_step1_positions": "0,255,255,255,255,255",
-        "right_hand_grasp_step1_positions": "0,255,255,255,255,255",
+        "left_hand_grasp_positions": "255,255,200,200,200,200",
+        "right_hand_grasp_positions": "255,255,200,200,200,200",
+        "left_hand_grasp_step1_positions": "255,255,200,200,200,200",
+        "right_hand_grasp_step1_positions": "255,255,200,200,200,200",
         "left_hand_release_positions": "255,255,255,255,255,255",
         "right_hand_release_positions": "255,255,255,255,255,255",
         "left_hand_grasp_durations": "200,200,200,200,200,200",
@@ -110,8 +110,8 @@ def generate_launch_description():
             DeclareLaunchArgument("cached_trajectory_start_blend_enabled", default_value="true"),
             DeclareLaunchArgument("object_to_left_tool_xyz", default_value="0.01,0.180,0.08"),
             DeclareLaunchArgument("object_to_right_tool_xyz", default_value="0.01,-0.180,0.08"),
-            DeclareLaunchArgument("left_grasp_delta_xyz", default_value="-0.02,0.01,-0.0"),
-            DeclareLaunchArgument("right_grasp_delta_xyz", default_value="0.0,-0.01,-0.0"),
+            DeclareLaunchArgument("left_grasp_delta_xyz", default_value="-0.07,-0.05,0.05"), # 位置偏移
+            DeclareLaunchArgument("right_grasp_delta_xyz", default_value="-0.05,0.05,0.07"),
             DeclareLaunchArgument("object_to_tool_orientation_mode", default_value="from_tool_orientation"),
             DeclareLaunchArgument("left_orientation_xyzw", default_value="-0.5,0.5,-0.5,0.5"),
             DeclareLaunchArgument("right_orientation_xyzw", default_value="0.5,0.5,0.5,0.5"),
@@ -150,14 +150,17 @@ def generate_launch_description():
             DeclareLaunchArgument("approach_x_offset", default_value="0.01"),
             DeclareLaunchArgument("side_offset_y", default_value="0.180"),
             DeclareLaunchArgument("approach_z_offset", default_value="0.08"),
+            DeclareLaunchArgument("grasp_descent_z", default_value="0.03"),  # 抓取点后沿 Z 下降距离，米
+            DeclareLaunchArgument("place_ascent_z", default_value="0.03"),  # place 后沿 Z 上升距离，米
+            DeclareLaunchArgument("place_release_spread_y", default_value="0.03"),  # place 后左右手各沿 Y 外展距离，米
             DeclareLaunchArgument("lift_z", default_value="0.20"),
             DeclareLaunchArgument("carry_x_offset", default_value="-0.07"),
             DeclareLaunchArgument("post_place_push_x", default_value="0.08"),
             DeclareLaunchArgument("post_place_retract_x", default_value="0.03"),
             DeclareLaunchArgument("post_place_spread_y", default_value="0.08"),
             DeclareLaunchArgument("post_place_lower_z", default_value="0.02"),
-            DeclareLaunchArgument("left_orientation_rpy_offset", default_value="0.0,0.0,-0.1"),
-            DeclareLaunchArgument("right_orientation_rpy_offset", default_value="0.0,0.0,0.1"),
+            DeclareLaunchArgument("left_orientation_rpy_offset", default_value="1.57,0.34,-0.75"), # 姿态偏移
+            DeclareLaunchArgument("right_orientation_rpy_offset", default_value="-1.57,0.34,0.78"),
             DeclareLaunchArgument("object_orientation_xyzw", default_value="0.0,0.0,0.0,1.0"),
             DeclareLaunchArgument("tool_frame_offset_z", default_value="0.10"),
             DeclareLaunchArgument("precheck_grasp_ik_before_pregrasp", default_value="true"),
@@ -193,8 +196,8 @@ def generate_launch_description():
                 default_value=(
                     # "0.9,0.2,0.0,-1.9,0.0,0.0,0.0,"
                     # "0.9,-0.2,0.0,-1.9,0.0,0.0,0.0"
-                    "-0.55, 0.45, -0.34, -0.52, -0.65, -0.33, 0.19,"
-                    "-0.55, -0.45, -0.34, -0.52, 0.65, -0.33, 0.19"
+                    "-0.42622, 0.59654, -0.32593, -0.96826, -0.72323, -0.09633, 0.04358,"
+                    "-0.42624, -0.59656, -0.32603, -0.96818, 0.72329, -0.09640, 0.04359"
                 ),
             ),
             DeclareLaunchArgument(
@@ -422,6 +425,11 @@ def generate_launch_description():
                         "approach_z_offset": ParameterValue(LaunchConfiguration("approach_z_offset"), value_type=float),
                         "left_grasp_delta_xyz": LaunchConfiguration("left_grasp_delta_xyz"),
                         "right_grasp_delta_xyz": LaunchConfiguration("right_grasp_delta_xyz"),
+                        "grasp_descent_z": ParameterValue(LaunchConfiguration("grasp_descent_z"), value_type=float),
+                        "place_ascent_z": ParameterValue(LaunchConfiguration("place_ascent_z"), value_type=float),
+                        "place_release_spread_y": ParameterValue(
+                            LaunchConfiguration("place_release_spread_y"), value_type=float
+                        ),
                         "lift_z": ParameterValue(LaunchConfiguration("lift_z"), value_type=float),
                         "carry_x_offset": ParameterValue(LaunchConfiguration("carry_x_offset"), value_type=float),
                         "post_place_push_x": ParameterValue(

@@ -1,5 +1,6 @@
 import json
 import math
+import time
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional
 
@@ -202,6 +203,7 @@ class MoveItGoalCommander(Node):
         self.ik_preferred_joint_blend = 0.0
         self._moveit_busy = False
         self._joint_state: Dict[str, float] = {}
+        self._joint_state_received_at: Dict[str, float] = {}
         self.visualization_enabled = bool(self.get_parameter("visualization_enabled").value)
         self.goal_axis_length = float(self.get_parameter("goal_axis_length").value)
         self.base_axis_length = float(self.get_parameter("base_axis_length").value)
@@ -544,6 +546,8 @@ class MoveItGoalCommander(Node):
             )
             return
         self._joint_state.update(incoming)
+        now = time.monotonic()
+        self._joint_state_received_at.update({name: now for name in incoming})
 
     def _on_goal_service(
         self,
@@ -559,6 +563,7 @@ class MoveItGoalCommander(Node):
             MoveItArmGoal.Request.COMMAND_OBJECT_EXECUTE_PLACE,
             MoveItArmGoal.Request.COMMAND_JOINT_PREPARE_LIFT_PLACE,
             MoveItArmGoal.Request.COMMAND_OBJECT_EXECUTE_PUSH,
+            MoveItArmGoal.Request.COMMAND_CARTESIAN_Z,
         ):
             response.accepted = False
             response.message = f"未知 command_type={request.command_type}"
@@ -589,6 +594,8 @@ class MoveItGoalCommander(Node):
                 self._dispatch_object_prepare_place_service_goal(request)
             elif request.command_type == MoveItArmGoal.Request.COMMAND_JOINT_PREPARE_LIFT_PLACE:
                 self._dispatch_joint_prepare_lift_place_service_goal(request)
+            elif request.command_type == MoveItArmGoal.Request.COMMAND_CARTESIAN_Z:
+                self._dispatch_cartesian_z_service_goal(request)
             elif request.command_type == MoveItArmGoal.Request.COMMAND_OBJECT_EXECUTE_PUSH:
                 self._dispatch_cached_object_push_service_goal(request)
             else:
@@ -608,6 +615,37 @@ class MoveItGoalCommander(Node):
         response.accepted = True
         response.message = "目标已接收并派发，执行结果请查看 /result 和对应手臂 result 话题。"
         return response
+
+    def _dispatch_cartesian_z_service_goal(self, request: MoveItArmGoal.Request) -> None:
+        if request.target != MoveItArmGoal.Request.TARGET_BOTH:
+            raise ValueError("竖直运动只支持双臂。")
+        if request.frame_id and request.frame_id != self.reference_frame:
+            raise ValueError("竖直运动的坐标系必须与 FK 参考坐标系一致。")
+        dz = float(request.cartesian_delta_z)
+        spread_y = float(request.cartesian_spread_y)
+        if not all(math.isfinite(value) for value in (dz, spread_y)) or max(abs(dz), abs(spread_y)) < 1e-9:
+            raise ValueError("笛卡尔运动位移必须是非零有限值。")
+        now = time.monotonic()
+        required = set(self.arms["both_arms"].关节名)
+        for chain in self._fk_chains.values():
+            required.update(joint.name for joint in chain
+                            if joint.type in ("revolute", "continuous", "prismatic"))
+        if any(name not in self._joint_state or now - self._joint_state_received_at.get(name, 0.0) > 1.0
+               for name in required):
+            raise ValueError("双臂关节状态缺失或超过 1 秒未更新，无法执行竖直运动。")
+        seed = dict(self._joint_state)
+        left = self._compute_tool_pose_from_positions("left_arm", seed)
+        right = self._compute_tool_pose_from_positions("right_arm", seed)
+        if left is None or right is None:
+            raise ValueError("无法计算当前双臂工具位姿。")
+        left.pose.position.z += dz
+        right.pose.position.z += dz
+        left.pose.position.y += spread_y
+        right.pose.position.y -= spread_y
+        self._send_both_pose_goal_via_cartesian_direct(
+            left, right, self.reference_frame, initial_seed=seed,
+            max_joint_step=float(request.max_joint_step),
+        )
 
     def _dispatch_pose_service_goal(self, request: MoveItArmGoal.Request) -> None:
         if bool(getattr(request, "use_cached_plan", False)):
