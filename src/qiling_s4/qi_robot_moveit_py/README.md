@@ -10,6 +10,8 @@
 | `lowstate_joint_states_bridge` | 真机链路专用，将 `lowstate` 转成 `/joint_states` |
 | `lowcmd_joint_states_echo` | RViz-only 模式专用，将 `lowcmd` 回显成 `/joint_states` |
 
+> **当前抓取流程**：抓取闭手后原位等待 `place`；收到指令后原位张手，并经过 home 过渡点回 home。上抬、下降、前推和回撤下放均不再预规划或执行。下文与这些动作相关的旧说明不适用于当前流程。
+
 ## 启动方式
 
 真机：

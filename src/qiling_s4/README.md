@@ -2,6 +2,8 @@
 
 本目录保留双臂控制相关代码：MoveIt 配置、控制节点、机器人描述、接口定义，以及启动脚本。导航、视觉实现和 MuJoCo 场景由其他模块维护。
 
+> **当前抓取流程**：视觉坐标、手动坐标和关节角三种入口均在抓取闭手后原位等待 `place`；收到 `place` 后原位张手，然后经过 home 过渡点回 home。不会预规划或执行上抬、下降、前推及回撤下放。下文有关这些动作、缓存和参数的旧描述不适用于当前抓取流程。
+
 ## 启动入口
 
 真机：
@@ -59,8 +61,8 @@ upper_limb_interface/srv/DetectAprilTag
 std_msgs/msg/String
 ```
 
-收到抓取指令时重置为 `false`，上抬成功等待放置时变为 `grasp success`；
-收到放置指令时重置为 `false`，完成下降、前推、张手和第一组 home 过渡姿态后，
+收到抓取指令时重置为 `false`，抓取闭手后等待放置时变为 `grasp success`；
+收到放置指令时重置为 `false`，完成张手和第一组 home 过渡姿态后，
 第二组 home 过渡关节目标被控制服务接受、开始执行时变为 `place success`。
 为了保留这个发布时间点，place 回 home 时逐个发送过渡点目标；即使
 `combined_task_trajectories=true`，也不会将这段 home 路径合并成单条目标。

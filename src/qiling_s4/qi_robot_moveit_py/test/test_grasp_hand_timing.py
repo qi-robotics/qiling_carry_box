@@ -188,42 +188,46 @@ def test_empty_optional_clearance_preserves_original_waypoint_order():
 
 @pytest.mark.parametrize("joint_grasp", [False, True])
 @pytest.mark.parametrize("attach_enabled", [False, True])
-def test_lift_follows_final_hand_and_optional_attach_without_extra_wait(monkeypatch, joint_grasp, attach_enabled):
-    import qi_robot_moveit_py.vision_grasp_sequence as module
-
-    class NoWaitHarness(_SequenceHarness):
-        carry_x_offset = 0.0
-        lift_z = 0.1
+def test_grasp_waits_in_place_without_lift_planning(joint_grasp, attach_enabled):
+    class WaitingHarness(_SequenceHarness):
         wait_for_place_command = True
         attach_after_grasp = False
-        _copy_pose = staticmethod(VisionGraspSequence._copy_pose)
 
         def _set_object_attach(self, enabled):
             self.events.append("attach")
             return True
 
-        def _send_both_arm_object_prepare_place_goal(self, *args, **kwargs):
-            if kwargs.get("plan_only"):
-                self.events.append("lift_preplan")
-                return True
-            self.events.append("lift")
-            return False  # Stop before executing any lift.
+        def _enter_awaiting_place(self, **kwargs):
+            self.events.append("waiting")
 
-    def unexpected_sleep(seconds):
-        raise AssertionError(f"extra sleep before lift: {seconds}")
-
-    monkeypatch.setattr(module.rclpy, "ok", lambda: True)
-    monkeypatch.setattr(module.time, "sleep", unexpected_sleep)
-    sequence = NoWaitHarness()
+    sequence = WaitingHarness()
     sequence.attach_on_grasp_start = attach_enabled
-
     if joint_grasp:
-        assert not VisionGraspSequence.run_joint_grasp_sequence(sequence, [0.0] * 14)
+        assert VisionGraspSequence.run_joint_grasp_sequence(sequence, [0.0] * 14)
     else:
-        assert not VisionGraspSequence.run_sequence(sequence)
-
+        assert VisionGraspSequence.run_sequence(sequence)
+    assert "lift_preplan" not in sequence.events
     final_hand = sequence.events.index(("hands", {"grasp": True}))
-    assert sequence.events[final_hand + 1:] == (["attach", "lift"] if attach_enabled else ["lift"])
+    assert sequence.events[final_hand + 1:] == (["attach", "waiting"] if attach_enabled else ["waiting"])
+
+
+def test_place_opens_hands_then_returns_home_without_cartesian_motion():
+    sequence = _SequenceHarness()
+    sequence._should_release_attached_object = lambda: False
+    sequence._send_home_joint_goal = lambda **kwargs: sequence.events.append(("home", kwargs)) or True
+    assert VisionGraspSequence._run_place_sequence(sequence, Pose(), Pose(), Pose(), Pose())
+    assert sequence.events == [
+        ("hands", {"grasp": False}),
+        ("home", {"publish_place_success_on_second_transition_start": True}),
+        ("hands", {"grasp": False, "force_right_resend": True}),
+    ]
+
+
+def test_place_does_not_return_home_if_opening_hands_fails():
+    sequence = _SequenceHarness()
+    sequence._send_hands_command = lambda **kwargs: False
+    assert not VisionGraspSequence._run_place_sequence(sequence, Pose(), Pose(), Pose(), Pose())
+    assert sequence.events == []
 
 
 def test_first_step_and_final_grasp_are_each_sent_once(monkeypatch):
