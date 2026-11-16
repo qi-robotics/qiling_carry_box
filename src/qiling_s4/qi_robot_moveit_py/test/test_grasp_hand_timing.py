@@ -220,14 +220,14 @@ def test_grasp_waits_in_place_without_lift_planning(joint_grasp, attach_enabled)
     assert sequence.events[final_hand + 1:] == (["attach", "waiting"] if attach_enabled else ["waiting"])
 
 
-def test_place_moves_up_and_out_before_opening_hands_and_returning_home():
+def test_place_opens_hands_before_moving_up_and_out_and_returning_home():
     sequence = _SequenceHarness()
     sequence._should_release_attached_object = lambda: False
     sequence._send_home_joint_goal = lambda **kwargs: sequence.events.append(("home", kwargs)) or True
     assert VisionGraspSequence._run_place_sequence(sequence, Pose(), Pose(), Pose(), Pose())
     assert sequence.events == [
-        ("z", 0.03, 0.03),
         ("hands", {"grasp": False}),
+        ("z", 0.03, 0.03),
         ("home", {"publish_place_success_on_second_transition_start": True}),
         ("hands", {"grasp": False, "force_right_resend": True}),
     ]
@@ -237,13 +237,15 @@ def test_place_does_not_return_home_if_opening_hands_fails():
     sequence = _SequenceHarness()
     sequence._send_hands_command = lambda **kwargs: False
     assert not VisionGraspSequence._run_place_sequence(sequence, Pose(), Pose(), Pose(), Pose())
-    assert sequence.events == [("z", 0.03, 0.03)]
+    assert sequence.events == []
 
 
-def test_first_step_and_final_grasp_are_each_sent_once(monkeypatch):
+def test_grasp_and_release_repeat_and_home_resend_is_preserved(monkeypatch):
     import qi_robot_moveit_py.vision_grasp_sequence as module
 
-    monkeypatch.setattr(module.rclpy, "ok", lambda: False)
+    monkeypatch.setattr(module.rclpy, "ok", lambda: True)
+    delays = []
+    monkeypatch.setattr(module.time, "sleep", delays.append)
     commands = []
     hand = SimpleNamespace(
         enable_hand_control=True,
@@ -253,23 +255,47 @@ def test_first_step_and_final_grasp_are_each_sent_once(monkeypatch):
         right_hand_id=1,
         left_hand_grasp_durations=[200] * 6,
         right_hand_grasp_durations=[200] * 6,
+        left_hand_release_durations=[65535] * 6,
+        right_hand_release_durations=[200] * 6,
+        left_hand_release_positions=[5] * 6,
+        right_hand_release_positions=[6] * 6,
+        hand_release_wait_sec=0.0,
         left_hand_grasp_step1_positions=[1] * 6,
         right_hand_grasp_step1_positions=[2] * 6,
         left_hand_grasp_positions=[3] * 6,
         right_hand_grasp_positions=[4] * 6,
-        hand_grasp_wait_sec=1.0,
+        hand_grasp_wait_sec=0.0,
         hand_grasp_step_delay_sec=1.0,
         hands_cmd_topic="/handscmd",
         get_logger=lambda: SimpleNamespace(info=lambda message: None, error=lambda message: None),
         _publish_status=lambda *args: None,
-        _publish_hands_msg=lambda *args: commands.append(args[:2]),
+        _publish_hands_msg=lambda *args: commands.append(args),
     )
 
     assert VisionGraspSequence._send_hands_command(hand, grasp=True, step1_only=True)
-    assert commands == [([1] * 6, [2] * 6)]
+    assert commands == [([1] * 6, [2] * 6, [200] * 6, [200] * 6)]
     commands.clear()
     assert VisionGraspSequence._send_hands_command(hand, grasp=True)
-    assert commands == [([3] * 6, [4] * 6)]
+    assert commands == [
+        ([3] * 6, [4] * 6, [200] * 6, [200] * 6),
+        ([3] * 6, [4] * 6, [201] * 6, [201] * 6),
+        ([3] * 6, [4] * 6, [200] * 6, [200] * 6),
+    ]
+    assert delays == [0.1, 0.1]
+    delays.clear()
+    commands.clear()
+    assert VisionGraspSequence._send_hands_command(hand, grasp=False)
+    assert commands == [
+        ([5] * 6, [6] * 6, [65535] * 6, [200] * 6),
+        ([5] * 6, [6] * 6, [65534] * 6, [201] * 6),
+        ([5] * 6, [6] * 6, [65535] * 6, [200] * 6),
+    ]
+    assert delays == [0.1, 0.1]
+    delays.clear()
+    commands.clear()
+    assert VisionGraspSequence._send_hands_command(hand, grasp=False, force_right_resend=True)
+    assert commands == [([5] * 6, [6] * 6, [65535] * 6, [201] * 6)]
+    assert delays == []
 
 
 @pytest.mark.parametrize("joint_grasp", [False, True])
@@ -283,8 +309,20 @@ def test_failed_descent_does_not_close_hands(joint_grasp):
     assert ("hands", {"grasp": True}) not in sequence.events
 
 
-def test_failed_place_ascent_does_not_release_or_return_home():
+def test_failed_place_ascent_after_release_does_not_return_home():
     sequence = _SequenceHarness()
+    sequence._should_release_attached_object = lambda: False
     sequence._send_cartesian_z = lambda delta, label, **kwargs: False
     assert not VisionGraspSequence._run_place_sequence(sequence, Pose(), Pose(), Pose(), Pose())
-    assert sequence.events == []
+    assert sequence.events == [("hands", {"grasp": False})]
+
+
+def test_place_detaches_simulated_object_before_ascent():
+    sequence = _SequenceHarness()
+    sequence._should_release_attached_object = lambda: True
+    sequence._set_object_attach = lambda enabled: sequence.events.append(("attach", enabled)) or True
+    sequence._send_home_joint_goal = lambda **kwargs: True
+    assert VisionGraspSequence._run_place_sequence(sequence, Pose(), Pose(), Pose(), Pose())
+    assert sequence.events[:3] == [
+        ("hands", {"grasp": False}), ("attach", False), ("z", 0.03, 0.03),
+    ]

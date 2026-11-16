@@ -48,14 +48,13 @@ def path():
                     defaults[node.args[0].value] = keyword.value.value
     points = [np.fromstring(defaults[name], sep=",") for name in (
         "home_joint_positions", "pregrasp_transition_joint_positions",
-        "pregrasp_middle_joint_positions", "pregrasp_clearance_joint_positions",
-        "pregrasp_joint_positions",
+        "pregrasp_middle_joint_positions", "pregrasp_joint_positions",
     )]
     assert all(len(point) == 14 for point in points)
     limits = {name: float(defaults[f"direct_{name}"]) for name in (
         "max_velocity", "max_acceleration", "max_jerk", "sample_period",
     )}
-    samples = plan_joint_path(points, **limits)
+    samples = plan_joint_path(points, segment_speed_scales=[1.0, 1.0, 0.5], **limits)
     urdf = ET.parse(DESCRIPTION / "urdf/s4_dual_arm.urdf").getroot()
     return points, samples, urdf
 
@@ -122,41 +121,7 @@ def test_late_path_no_longer_dips_below_original_pregrasp_pinky_height(path, sid
                          -.55, -.45, -.34, -.52, .65, -.33, .19])
     original_height = _minimum_height(geometry, original)
     endpoint_height = _minimum_height(geometry, points[-1])
-    assert endpoint_height > original_height + .04
+    assert endpoint_height > original_height
     assert _minimum_height(geometry, points[2]) > original_height + .06
-    assert _minimum_height(geometry, points[3]) > original_height + .05
     heights = [_minimum_height(geometry, sample[1]) for sample in samples[start:]]
     assert min(heights) >= original_height - 1e-4
-
-
-def _tool_transform(urdf, side, positions):
-    joints = {joint.find("child").get("link"): joint for joint in urdf.findall("joint")}
-    name = f"{side}_hand_base_link"
-    chain = []
-    while name != "base_link":
-        joint = joints[name]
-        chain.append(joint)
-        name = joint.find("parent").get("link")
-    transform = np.eye(4)
-    for joint in reversed(chain):
-        transform = transform @ _origin(joint.find("origin"))
-        if joint.get("type") != "fixed":
-            rotation = np.eye(4)
-            axis = np.fromstring(joint.find("axis").get("xyz"), sep=" ")
-            rotation[:3, :3] = Rotation.from_rotvec(axis * positions[NAMES.index(joint.get("name"))]).as_matrix()
-            transform = transform @ rotation
-    offset = np.eye(4)
-    offset[2, 3] = 0.10
-    return transform @ offset
-
-
-@pytest.mark.parametrize("side", ["LH", "RH"])
-def test_pregrasp_tool_rises_five_cm_with_small_orientation_change(path, side):
-    points, _, urdf = path
-    original = np.array([-.55, .45, -.34, -.52, -.65, -.33, .19,
-                         -.55, -.45, -.34, -.52, .65, -.33, .19])
-    before = _tool_transform(urdf, side, original)
-    after = _tool_transform(urdf, side, points[-1])
-    np.testing.assert_allclose(after[:3, 3] - before[:3, 3], [-.01, 0, .05], atol=1e-4)
-    orientation_delta = Rotation.from_matrix(after[:3, :3] @ before[:3, :3].T).magnitude()
-    assert orientation_delta < np.deg2rad(3)

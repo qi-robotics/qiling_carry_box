@@ -15,6 +15,7 @@ def plan_joint_path(
     sample_period: float,
     hold_after_index: int | None = None,
     hold_duration: float = 0.0,
+    segment_speed_scales: Sequence[float] | None = None,
 ) -> list[tuple[float, list[float], list[float], list[float]]]:
     """Return (time, position, velocity, acceleration) samples in one trajectory.
 
@@ -34,12 +35,18 @@ def plan_joint_path(
     if hold_after_index is not None and not 0 <= hold_after_index < len(points):
         raise ValueError("Ruckig hold waypoint index is out of range")
 
+    scales = list(segment_speed_scales) if segment_speed_scales is not None else [1.0] * (len(points) - 1)
+    if len(scales) != len(points) - 1 or any(not math.isfinite(v) or not 0.0 < v <= 1.0 for v in scales):
+        raise ValueError("segment_speed_scales must contain one value in (0, 1] per segment")
     compact = [points[0]]
+    compact_scales = []
     index_map = [0]
-    for point in points[1:]:
+    for point, scale in zip(points[1:], scales):
         if any(abs(a - b) > 1e-8 for a, b in zip(point, compact[-1])):
             compact.append(point)
+            compact_scales.append(float(scale))
         index_map.append(len(compact) - 1)
+    scales = compact_scales
     if hold_after_index is not None:
         hold_after_index = index_map[hold_after_index]
     points = compact
@@ -50,7 +57,7 @@ def plan_joint_path(
 
     otg = ruckig.Ruckig(dofs, sample_period)
 
-    def calculate(start, end, start_velocity, end_velocity):
+    def calculate(start, end, start_velocity, end_velocity, speed_scale):
         inp = ruckig.InputParameter(dofs)
         inp.current_position = start
         inp.current_velocity = start_velocity
@@ -58,9 +65,9 @@ def plan_joint_path(
         inp.target_position = end
         inp.target_velocity = end_velocity
         inp.target_acceleration = [0.0] * dofs
-        inp.max_velocity = [max_velocity] * dofs
-        inp.max_acceleration = [max_acceleration] * dofs
-        inp.max_jerk = [max_jerk] * dofs
+        inp.max_velocity = [max_velocity * speed_scale] * dofs
+        inp.max_acceleration = [max_acceleration * speed_scale ** 2] * dofs
+        inp.max_jerk = [max_jerk * speed_scale ** 3] * dofs
         trajectory = ruckig.Trajectory(dofs)
         result = otg.calculate(inp, trajectory)
         if result not in (ruckig.Result.Working, ruckig.Result.Finished):
@@ -69,8 +76,8 @@ def plan_joint_path(
 
     zero = [0.0] * dofs
     nominal_times = [
-        max(calculate(a, b, zero, zero).duration, sample_period)
-        for a, b in zip(points[:-1], points[1:])
+        max(calculate(a, b, zero, zero, scale).duration, sample_period)
+        for a, b, scale in zip(points[:-1], points[1:], scales)
     ]
     interior = [[0.0] * dofs for _ in points]
     for index in range(1, len(points) - 1):
@@ -82,7 +89,7 @@ def plan_joint_path(
             if before * after > 0:
                 interior[index][joint] = math.copysign(
                     min(
-                        0.5 * max_velocity,
+                        0.5 * max_velocity * min(scales[index - 1], scales[index]),
                         0.5 * abs(before) / nominal_times[index - 1],
                         0.5 * abs(after) / nominal_times[index],
                     ),
@@ -95,7 +102,7 @@ def plan_joint_path(
         segments = []
         try:
             for index, (start, end) in enumerate(zip(points[:-1], points[1:])):
-                segment = calculate(start, end, velocities[index], velocities[index + 1])
+                segment = calculate(start, end, velocities[index], velocities[index + 1], scales[index])
                 steps = max(1, math.ceil(segment.duration / sample_period))
                 for step in range(steps + 1):
                     position, _, _ = segment.at_time(segment.duration * step / steps)

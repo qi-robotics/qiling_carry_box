@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from qi_robot_moveit_py.movel_path import JointLine, plan_joint_line, smooth_joint_waypoints
+from qi_robot_moveit_py.movel_path import JointLine, plan_joint_line, scale_trajectory_speed, smooth_joint_waypoints
 
 
 def test_joint_line_has_continuous_position_velocity_and_acceleration():
@@ -75,3 +75,21 @@ def test_minimum_duration_resamples_at_requested_period():
     assert limited[-1][0] == pytest.approx(minimum)
     assert max(b[0] - a[0] for a, b in zip(limited, limited[1:])) <= 0.020001
     assert max(abs(row[2][0]) for row in limited) < max(abs(row[2][0]) for row in original)
+
+
+def test_grasp_approach_speed_scaling_preserves_path_and_halves_velocity():
+    samples = [(0.0, [0.0], [0.0], [0.0]), (1.0, [0.4], [0.3], [-0.2]),
+               (2.0, [1.0], [0.0], [0.0])]
+    slower = scale_trajectory_speed(samples, 0.5)
+    for old, new in zip(samples, slower):
+        assert new[0] == pytest.approx(2.0 * old[0])
+        assert new[1] == old[1]
+        assert new[2] == pytest.approx([0.5 * v for v in old[2]])
+        assert new[3] == pytest.approx([0.25 * a for a in old[3]])
+    assert samples[1][2] == [0.3]  # cached trajectory is not modified
+
+
+@pytest.mark.parametrize("scale", [0.0, -0.1, 1.1, float("nan")])
+def test_grasp_speed_scale_rejects_invalid_values(scale):
+    with pytest.raises(ValueError):
+        scale_trajectory_speed([], scale)

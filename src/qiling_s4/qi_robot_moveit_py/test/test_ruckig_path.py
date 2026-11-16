@@ -50,6 +50,38 @@ class RuckigPathTest(unittest.TestCase):
             self.assertTrue(any(all(abs(a - b) < 1e-7 for a, b in zip(sample[1], waypoint))
                                 for sample in samples))
 
+    def test_only_selected_segment_uses_scaled_limits(self):
+        points = [[0.0], [0.3], [1.0], [1.3]]
+        samples = plan_joint_path(points, segment_speed_scales=[1.0, 0.5, 1.0], **LIMITS)
+        middle = next(i for i, sample in enumerate(samples) if abs(sample[1][0] - 0.3) < 1e-8)
+        end = next(i for i, sample in enumerate(samples) if abs(sample[1][0] - 1.0) < 1e-8)
+        slowed = samples[middle:end + 1]
+        self.assertLessEqual(max(abs(sample[2][0]) for sample in slowed), LIMITS["max_velocity"] * 0.5 + 1e-6)
+        self.assertLessEqual(max(abs(sample[3][0]) for sample in slowed), LIMITS["max_acceleration"] * 0.25 + 1e-6)
+        self.assertGreater(samples[middle][2][0], 0.0)
+        self.assertGreater(samples[end][2][0], 0.0)
+        self.assertTrue(all(b[0] > a[0] for a, b in zip(samples, samples[1:])))
+
+    def test_scaled_segment_after_duplicate_waypoint(self):
+        samples = plan_joint_path([[0.0], [0.0], [0.7]], segment_speed_scales=[1.0, 0.5], **LIMITS)
+        self.assertLessEqual(max(abs(sample[2][0]) for sample in samples), LIMITS["max_velocity"] * 0.5 + 1e-6)
+
+    def test_matching_pregrasp_segment_is_selected(self):
+        from types import SimpleNamespace
+        from qi_robot_moveit_py.moveit_goal_commander import MoveItGoalCommander
+
+        start, end = [0.1] * 14, [0.2] * 14
+        values = {
+            "pregrasp_segment_speed_scale": 0.5,
+            "pregrasp_slow_start_positions": ",".join(map(str, start)),
+            "pregrasp_slow_end_positions": ",".join(map(str, end)),
+        }
+        node = SimpleNamespace(get_parameter=lambda key: SimpleNamespace(value=values[key]))
+        self.assertEqual(
+            MoveItGoalCommander._pregrasp_speed_scales(node, [[0.0] * 14, start, end, [0.3] * 14]),
+            [1.0, 0.5, 1.0],
+        )
+
     def test_rejects_invalid_limits_and_waypoints(self):
         with self.assertRaises(ValueError):
             plan_joint_path([[0.0], [math.nan]], **LIMITS)

@@ -41,7 +41,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from qi_robot_moveit_py.joint_state_safety import JointStateFrameGuard
 from qi_robot_moveit_py.movel_path import (
-    JointLine, plan_joint_line, smooth_joint_waypoints,
+    JointLine, plan_joint_line, scale_trajectory_speed, smooth_joint_waypoints,
 )
 from qi_robot_moveit_py.ruckig_path import plan_joint_path
 
@@ -130,6 +130,10 @@ class MoveItGoalCommander(Node):
         self.declare_parameter("direct_spline_max_joint_deviation", 0.08)
         self.declare_parameter("direct_velocity_scale", 0.75)
         self.declare_parameter("direct_time_parameterization", "jerk_limited")
+        self.declare_parameter("pregrasp_segment_speed_scale", 1.0)
+        self.declare_parameter("grasp_approach_speed_scale", 1.0)
+        self.declare_parameter("pregrasp_slow_start_positions", "")
+        self.declare_parameter("pregrasp_slow_end_positions", "")
         self.declare_parameter("direct_max_velocity", 0.45)
         self.declare_parameter("direct_max_acceleration", 0.80)
         self.declare_parameter("direct_max_jerk", 2.50)
@@ -790,7 +794,8 @@ class MoveItGoalCommander(Node):
 
         arm_name = self._target_to_arm_name(request.target)
         prefix = self._request_joint_waypoints(request, self.arms[arm_name])
-        if prefix:
+        joint_grasp = request.cache_key == "joint_grasp_approach"
+        if prefix or joint_grasp:
             arm = self.arms[arm_name]
             if self._direct_busy[arm_name]:
                 raise ValueError(f"{arm_name} 控制器正在执行上一条轨迹。")
@@ -799,7 +804,10 @@ class MoveItGoalCommander(Node):
                 raise ValueError("关节路径终点的关节名或位置数量不正确。")
             target = self._ordered_positions(arm, names, joint_goal.position)
             self._moveit_busy = True
-            self._send_direct_joint_trajectory(arm, prefix + [target], result_label=f"{arm_name} 关节路径")
+            self._send_direct_joint_trajectory(
+                arm, prefix + [target], result_label=f"{arm_name} 关节路径",
+                grasp_start_index=(len(prefix) - 1) if joint_grasp else None,
+            )
             return
         self._on_joint_goal(arm_name, joint_goal)
 
@@ -1522,6 +1530,35 @@ class MoveItGoalCommander(Node):
         )
         return smoothed
 
+    def _grasp_approach_speed_scale(self) -> float:
+        scale = float(self.get_parameter("grasp_approach_speed_scale").value)
+        if not math.isfinite(scale) or not 0.0 < scale <= 1.0:
+            raise ValueError("grasp_approach_speed_scale 必须在 (0, 1] 范围内。")
+        return scale
+
+    def _pregrasp_speed_scales(self, positions: List[List[float]]) -> List[float]:
+        scale = float(self.get_parameter("pregrasp_segment_speed_scale").value)
+        if not math.isfinite(scale) or not 0.0 < scale <= 1.0:
+            raise ValueError("pregrasp_segment_speed_scale 必须在 (0, 1] 范围内。")
+        start_text = str(self.get_parameter("pregrasp_slow_start_positions").value).strip()
+        end_text = str(self.get_parameter("pregrasp_slow_end_positions").value).strip()
+        scales = [1.0] * max(0, len(positions) - 1)
+        if not start_text or not end_text or scale == 1.0:
+            return scales
+        try:
+            start = [float(v.strip()) for v in start_text.split(",")]
+            end = [float(v.strip()) for v in end_text.split(",")]
+        except ValueError as exc:
+            raise ValueError("预抓取减速起点或终点格式无效。") from exc
+        if len(start) != 14 or len(end) != 14 or not all(math.isfinite(v) for v in start + end):
+            raise ValueError("预抓取减速起点和终点必须各包含 14 个有限关节角。")
+        for i, (a, b) in enumerate(zip(positions[:-1], positions[1:])):
+            if (len(a) == len(b) == 14
+                    and max(abs(x - y) for x, y in zip(a, start)) < 1e-6
+                    and max(abs(x - y) for x, y in zip(b, end)) < 1e-6):
+                scales[i] = scale
+        return scales
+
     def _send_direct_joint_trajectory(
         self,
         arm: ArmConfig,
@@ -1532,6 +1569,7 @@ class MoveItGoalCommander(Node):
         start_from_first_point: bool = False,
         result_label: str = "",
         goal_position_tolerance: float = 0.0,
+        grasp_start_index: Optional[int] = None,
     ) -> None:
         result_label = result_label or f"{arm.名称} 直发"
         if self._direct_busy[arm.名称]:
@@ -1565,9 +1603,13 @@ class MoveItGoalCommander(Node):
         if str(self.get_parameter("direct_time_parameterization").value).strip().lower() == "ruckig":
             self._send_ruckig_joint_trajectory(
                 arm, controller, positions, result_label, start_from_first_point,
-                hold_after_index, hold_duration, goal_position_tolerance,
+                hold_after_index, hold_duration, goal_position_tolerance, grasp_start_index,
             )
             return
+
+        if (any(scale < 1.0 for scale in self._pregrasp_speed_scales(positions))
+                or (grasp_start_index is not None and self._grasp_approach_speed_scale() < 1.0)):
+            raise ValueError("预抓取或抓取分段减速需要 direct_time_parameterization=ruckig。")
 
         duration = max(float(self.get_parameter("direct_motion_duration").value), 0.1)
         raw_count = len(positions)
@@ -1638,6 +1680,7 @@ class MoveItGoalCommander(Node):
         hold_after_index: Optional[int],
         hold_duration: float,
         goal_position_tolerance: float,
+        grasp_start_index: Optional[int] = None,
     ) -> None:
         # The first sample is the actual robot state. This also avoids the
         # bridge's extra start hold/blend on an already time-parameterized path.
@@ -1645,6 +1688,13 @@ class MoveItGoalCommander(Node):
             positions = [self._current_positions(arm)] + positions
             if hold_after_index is not None:
                 hold_after_index += 1
+            if grasp_start_index is not None:
+                grasp_start_index += 1
+        speed_scales = self._pregrasp_speed_scales(positions)
+        if grasp_start_index is not None:
+            scale = self._grasp_approach_speed_scale()
+            for i in range(max(0, grasp_start_index), len(speed_scales)):
+                speed_scales[i] = min(speed_scales[i], scale)
         self._log_waypoint_joint_steps(arm, positions)
         self._log_waypoint_joint_ranges(arm, positions)
         samples = plan_joint_path(
@@ -1655,6 +1705,7 @@ class MoveItGoalCommander(Node):
             sample_period=float(self.get_parameter("direct_sample_period").value),
             hold_after_index=hold_after_index,
             hold_duration=max(0.0, float(hold_duration)),
+            segment_speed_scales=speed_scales,
         )
         goal = FollowJointTrajectory.Goal()
         goal.trajectory.joint_names = arm.关节名
@@ -2748,6 +2799,7 @@ class MoveItGoalCommander(Node):
             self.arms["both_arms"],
             [list(point) for point in positions],
             result_label=label,
+            grasp_start_index=(len(prefix or []) - 1) if cache_key == "grasp" else None,
         )
 
     def _movel_enabled(self) -> bool:
@@ -2971,6 +3023,10 @@ class MoveItGoalCommander(Node):
     ) -> None:
         arm = self.arms["both_arms"]
         samples = list(self._cached_movel_samples[keys[0]])
+        if keys == ("grasp",):
+            scale = self._grasp_approach_speed_scale()
+            samples = scale_trajectory_speed(samples, scale)
+            self.get_logger().info(f"预抓取到抓取点 MoveL 速度比例={scale:.3f}。")
         for key in keys[1:]:
             following = self._cached_movel_samples[key]
             if max(abs(a - b) for a, b in zip(samples[-1][1], following[0][1])) > 1e-5:
@@ -2992,6 +3048,7 @@ class MoveItGoalCommander(Node):
             max_acceleration=float(self.get_parameter("direct_max_acceleration").value),
             max_jerk=float(self.get_parameter("direct_max_jerk").value),
             sample_period=float(self.get_parameter("direct_sample_period").value),
+            segment_speed_scales=self._pregrasp_speed_scales(bridge_points),
         )
         offset = bridge[-1][0]
         combined = bridge + [(offset + t, q, v, a) for t, q, v, a in samples[1:]]

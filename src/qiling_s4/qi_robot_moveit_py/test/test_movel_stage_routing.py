@@ -349,3 +349,40 @@ def test_downstream_movel_starts_at_previous_ik_solution():
     assert not MoveItGoalCommander._cached_movel_is_faster(
         planner, ("place",), [[0.2, 0.2], [0.3, 0.3]]
     )
+
+
+def test_grasp_joint_path_scales_only_approach_after_pregrasp(monkeypatch):
+    import qi_robot_moveit_py.moveit_goal_commander as module
+
+    captured = []
+    def fake_plan(points, **kwargs):
+        captured.append((points, kwargs["segment_speed_scales"]))
+        return [(0.0, points[0], [0.0] * 14, [0.0] * 14),
+                (1.0, points[-1], [0.0] * 14, [0.0] * 14)]
+    monkeypatch.setattr(module, "plan_joint_path", fake_plan)
+    arm = SimpleNamespace(名称="both_arms", 关节名=[f"j{i}" for i in range(14)])
+    controller = SimpleNamespace(send_goal_async=lambda goal: SimpleNamespace(add_done_callback=lambda cb: None))
+    params = {"direct_max_velocity": 0.85, "direct_max_acceleration": 0.6,
+              "direct_max_jerk": 3.0, "direct_sample_period": 0.02}
+    node = SimpleNamespace(
+        _current_positions=lambda arm: [0.0] * 14,
+        _pregrasp_speed_scales=lambda positions: ([1.0, 0.5] + [1.0] * len(positions))[:len(positions)-1],
+        _grasp_approach_speed_scale=lambda: 0.5,
+        _log_waypoint_joint_steps=lambda *args: None,
+        _log_waypoint_joint_ranges=lambda *args: None,
+        get_parameter=lambda name: SimpleNamespace(value=params[name]),
+        get_clock=lambda: SimpleNamespace(now=lambda: SimpleNamespace(to_msg=lambda: Time())),
+        _duration_msg=MoveItGoalCommander._duration_msg,
+        get_logger=lambda: SimpleNamespace(info=lambda message: None),
+        _direct_busy={}, _direct_result_labels={},
+    )
+    prefix = [[0.1] * 14, [0.2] * 14, [0.3] * 14]
+    target = [0.4] * 14
+    MoveItGoalCommander._send_ruckig_joint_trajectory(
+        node, arm, controller, prefix + [target], "test", False, None, 0.0, 0.0, 2,
+    )
+    assert captured[-1][1] == [1.0, 0.5, 1.0, 0.5]
+    MoveItGoalCommander._send_ruckig_joint_trajectory(
+        node, arm, controller, [target], "test", False, None, 0.0, 0.0, -1,
+    )
+    assert captured[-1][1] == [0.5]

@@ -95,6 +95,10 @@ def generate_launch_description():
             DeclareLaunchArgument("direct_spline_max_joint_deviation", default_value="0.08"),
             DeclareLaunchArgument("direct_velocity_scale", default_value="0.65"),
             DeclareLaunchArgument("direct_time_parameterization", default_value="jerk_limited"),
+            DeclareLaunchArgument("pregrasp_segment_speed_scale", default_value="1.0"),
+            DeclareLaunchArgument("grasp_approach_speed_scale", default_value="1.0"),
+            DeclareLaunchArgument("pregrasp_slow_start_positions", default_value=""),
+            DeclareLaunchArgument("pregrasp_slow_end_positions", default_value=""),
             DeclareLaunchArgument("direct_max_velocity", default_value="0.45"),
             DeclareLaunchArgument("direct_max_acceleration", default_value="0.80"),
             DeclareLaunchArgument("direct_max_jerk", default_value="2.50"),
@@ -220,6 +224,18 @@ def generate_launch_description():
                             LaunchConfiguration("direct_velocity_scale"), value_type=float
                         ),
                         "direct_time_parameterization": LaunchConfiguration("direct_time_parameterization"),
+                        "grasp_approach_speed_scale": ParameterValue(
+                            LaunchConfiguration("grasp_approach_speed_scale"), value_type=float
+                        ),
+                        "pregrasp_segment_speed_scale": ParameterValue(
+                            LaunchConfiguration("pregrasp_segment_speed_scale"), value_type=float
+                        ),
+                        "pregrasp_slow_start_positions": ParameterValue(
+                            LaunchConfiguration("pregrasp_slow_start_positions"), value_type=str
+                        ),
+                        "pregrasp_slow_end_positions": ParameterValue(
+                            LaunchConfiguration("pregrasp_slow_end_positions"), value_type=str
+                        ),
                         "direct_max_velocity": ParameterValue(
                             LaunchConfiguration("direct_max_velocity"), value_type=float
                         ),

@@ -89,6 +89,17 @@ def smooth_joint_waypoints(
     return smoothed
 
 
+def scale_trajectory_speed(samples, speed_scale: float):
+    """Stretch a sampled trajectory in time without changing its joint path."""
+    if not math.isfinite(speed_scale) or not 0.0 < speed_scale <= 1.0:
+        raise ValueError("speed_scale must be finite and in (0, 1]")
+    return [
+        (t / speed_scale, list(q), [v * speed_scale for v in velocity],
+         [a * speed_scale**2 for a in acceleration])
+        for t, q, velocity, acceleration in samples
+    ]
+
+
 def plan_joint_line(
     line: JointLine,
     *,

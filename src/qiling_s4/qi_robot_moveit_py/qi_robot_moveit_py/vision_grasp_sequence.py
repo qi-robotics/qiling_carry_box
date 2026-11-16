@@ -578,6 +578,7 @@ class VisionGraspSequence(Node):
         if not self._send_both_arm_joint_goal(
             positions, "双臂关节角抓取",
             joint_waypoints=self._grasp_prefix() if self.combined_task_trajectories else (),
+            grasp_approach=True,
         ):
             return False
         self._publish_status("grasp", "motion", "ok", "抓取关节角执行完成")
@@ -1142,10 +1143,13 @@ class VisionGraspSequence(Node):
         *,
         on_goal_accepted: Optional[Callable[[], None]] = None,
         joint_waypoints: Sequence[Sequence[float]] = (),
+        grasp_approach: bool = False,
     ) -> bool:
         request = MoveItArmGoal.Request()
         request.target = MoveItArmGoal.Request.TARGET_BOTH
         request.command_type = MoveItArmGoal.Request.COMMAND_JOINT
+        if grasp_approach:
+            request.cache_key = "joint_grasp_approach"
         request.joint_goal = JointState()
         request.joint_goal.name = self._both_arm_joint_names()
         request.joint_goal.position = [float(value) for value in positions]
@@ -1232,12 +1236,8 @@ class VisionGraspSequence(Node):
         object_grasp: Optional[Pose] = None,
     ) -> bool:
         del left_lift, right_lift, left_grasp, right_grasp, object_grasp
-        if not self._send_cartesian_z(
-            self.place_ascent_z, "放置前上升外展", spread_y=self.place_release_spread_y
-        ):
-            return False
-        self.get_logger().info("放置前上升外展完成，原位张开灵巧手。")
-        self._publish_status("hand", "command", "info", "放置前上升外展完成，原位张开灵巧手")
+        self.get_logger().info("收到放置指令，原位张开灵巧手。")
+        self._publish_status("hand", "command", "info", "收到放置指令，原位张开灵巧手")
         if not self._send_hands_command(grasp=False):
             return False
 
@@ -1247,6 +1247,11 @@ class VisionGraspSequence(Node):
                 return False
         else:
             self.get_logger().info("灵巧手张开指令已发送，当前未启用 MuJoCo 吸附，跳过吸附关闭（未验证手指到位）。")
+
+        if not self._send_cartesian_z(
+            self.place_ascent_z, "张手后上升外展", spread_y=self.place_release_spread_y
+        ):
+            return False
 
         self.get_logger().info("开始依次返回 home 过渡点和 home 点。")
         self._publish_status("place", "motion", "info", "开始回home")
@@ -1879,6 +1884,29 @@ class VisionGraspSequence(Node):
             f"left(index={self.left_hand_array_index}, id={self.left_hand_id}, positions={left_positions}, durations={left_durations})；"
             f"right(index={self.right_hand_array_index}, id={self.right_hand_id}, positions={right_positions}, durations={right_durations})"
         )
+
+        if (grasp and not step1_only) or (not grasp and not force_right_resend):
+            # The SDK may deduplicate identical positions + durations per hand.
+            # Keep the position target unchanged and alternate durations by 1 ms.
+            for resend_index in (1, 2):
+                time.sleep(0.1)
+                if not rclpy.ok():
+                    return False
+                resend_left = [
+                    (duration + 1 if duration < 65535 else duration - 1)
+                    if resend_index == 1 else duration
+                    for duration in left_durations
+                ]
+                resend_right = [
+                    (duration + 1 if duration < 65535 else duration - 1)
+                    if resend_index == 1 else duration
+                    for duration in right_durations
+                ]
+                self._publish_hands_msg(left_positions, right_positions, resend_left, resend_right)
+                self.get_logger().info(
+                    f"灵巧手{action}第 {resend_index} 次重发，目标位置不变；"
+                    f"left durations={resend_left}, right durations={resend_right}。"
+                )
 
         if wait_sec > 0.01:
             self.get_logger().info(f"灵巧手{action}等待执行同步 {wait_sec:.2f}s。")

@@ -2,7 +2,9 @@
 
 本目录保留双臂控制相关代码：MoveIt 配置、控制节点、机器人描述、接口定义，以及启动脚本。导航、视觉实现和 MuJoCo 场景由其他模块维护。
 
-> **当前抓取流程**：到达抓取点后，双臂沿 `base_link` 的 Z 方向下降 `grasp_descent_z`，再闭手并等待 `place`；收到 `place` 后，同步上升 `place_ascent_z` 并向两侧各外展 `place_release_spread_y`，再张手并经过 home 过渡点回 home。各距离在真机 `robot_stack.launch.py` 中默认为 0.03 m，参数为非负值、设为 0 时跳过对应动作。每段使用当前关节状态计算工具位姿并保持姿态；失败时不会进入后续动作。下文关于旧版上抬、下降、前推和回撤下放的说明不适用于当前抓取流程。
+> **当前抓取流程**：到达抓取点后，双臂沿 `base_link` 的 Z 方向下降 `grasp_descent_z`，再闭手并等待 `place`；收到 `place` 后，先张手，再同步上升 `place_ascent_z` 并向两侧各外展 `place_release_spread_y`，然后经过 home 过渡点回 home。各距离在真机 `robot_stack.launch.py` 中默认为 0.03 m，参数为非负值、设为 0 时跳过对应动作。每段使用当前关节状态计算工具位姿并保持姿态；失败时不会进入后续动作。下文关于旧版上抬、下降、前推和回撤下放的说明不适用于当前抓取流程。
+
+真机预抓取路径依次经过 `pregrasp_transition_joint_positions`、`pregrasp_middle_joint_positions` 和 `pregrasp_joint_positions`；middle 到预抓取点的关节轨迹使用 `pregrasp_segment_speed_scale`（默认 0.5）缩放速度上限，加速度和 jerk 上限分别按比例的平方和立方缩放。该段速度缩放使用 Ruckig，调整参数后需重启节点。 预抓取点到抓取点使用 `grasp_approach_speed_scale`（默认 0.5）；MoveL 通过时间缩放使该段执行时间翻倍。
 
 ## 启动入口
 

@@ -10,7 +10,9 @@
 | `lowstate_joint_states_bridge` | 真机链路专用，将 `lowstate` 转成 `/joint_states` |
 | `lowcmd_joint_states_echo` | RViz-only 模式专用，将 `lowcmd` 回显成 `/joint_states` |
 
-> **当前抓取流程**：到达抓取点后，双臂沿 `base_link` 的 Z 方向下降 `grasp_descent_z`，再闭手并等待 `place`；收到 `place` 后，同步上升 `place_ascent_z` 并向两侧各外展 `place_release_spread_y`，再张手并经过 home 过渡点回 home。各距离在真机 `robot_stack.launch.py` 中默认为 0.03 m，参数为非负值、设为 0 时跳过对应动作。每段使用当前关节状态计算工具位姿并保持姿态；失败时不会进入后续动作。下文关于旧版上抬、下降、前推和回撤下放的说明不适用于当前抓取流程。
+> **当前抓取流程**：到达抓取点后，双臂沿 `base_link` 的 Z 方向下降 `grasp_descent_z`，再闭手并等待 `place`；收到 `place` 后，先张手，再同步上升 `place_ascent_z` 并向两侧各外展 `place_release_spread_y`，然后经过 home 过渡点回 home。各距离在真机 `robot_stack.launch.py` 中默认为 0.03 m，参数为非负值、设为 0 时跳过对应动作。每段使用当前关节状态计算工具位姿并保持姿态；失败时不会进入后续动作。下文关于旧版上抬、下降、前推和回撤下放的说明不适用于当前抓取流程。
+
+最终抓取握姿和放置时的张手命令各发布一次，并间隔 0.1 秒重发两次。三次目标位置相同，第二次的执行时长微调 1 ms，以避免 SDK 对相同位置和时长去重；最后一次发送后分别按 `hand_grasp_wait_sec` 和 `hand_release_wait_sec` 等待。回 home 后仍保留原有的一次张手补发。发送成功不代表双手已实际到位。
 
 ## 启动方式
 
