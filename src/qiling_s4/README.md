@@ -89,7 +89,7 @@ ros2 topic echo /vision_grasp/result
 ```bash
 ros2 topic pub --once /vision_grasp/grasp_command std_msgs/msg/String "{data: grasp}"
 ros2 topic pub --once /vision_grasp/grasp_command std_msgs/msg/String \
-  "{data: 'grasp 0.47 0.00 0.02'}"
+  "{data: 'grasp 0.44 0.00 0.055'}"
 ```
 
 真机视觉抓取的箱体 X 范围为 0.43～0.45 m：低于下限时使用 0.43 m，范围内使用识别值，
@@ -370,10 +370,10 @@ sudo systemctl enable robot_stack_monitor
 说明：
 
 - 工作目录 / ExecStart 指向 `qiling_carry_box`
-- `ROS_DOMAIN_ID=22`
-- `CYCLONEDDS_URI` 使用旧 `qiling_s4` 服务的
-  `/home/coral/dds/cyclonedds.xml`（本机 `enp6s0`，与 SDK 配置一致）
-- 若配置文件缺失，`monitor_robot_stack.sh` 会尝试交付包、SDK 和本机的备用 XML
+- `ROS_DOMAIN_ID=17`
+- `CYCLONEDDS_URI` 使用当前 SDK 的 `/home/coral/project/qi_sdk_internal_igh/deploy/ql_sdk_igh_release/config/dds/ql_cyclonedds_uri.xml`；当前配置指定 Domain 17 和 `enp8s0` 网卡。
+- 若配置文件不可用，`monitor_robot_stack.sh` 优先尝试 SDK 配置，再尝试备用 XML，跳过 Domain 与 `ROS_DOMAIN_ID` 不一致的文件。更换机器时需要确认 XML 网卡与 SDK 的实际配置一致。
+- 更新仓库内的服务模板后，需要重新安装服务文件并执行 `daemon-reload`；仅修改仓库文件不会更新 `/etc/systemd/system/` 中的已安装服务。
 
 ### 管理命令
 

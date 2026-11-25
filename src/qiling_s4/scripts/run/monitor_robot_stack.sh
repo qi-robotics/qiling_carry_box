@@ -20,8 +20,8 @@ set -Eeuo pipefail
 
 # ---------- ROS / DDS 环境 ----------
 export RMW_IMPLEMENTATION="${RMW_IMPLEMENTATION:-rmw_cyclonedds_cpp}"
-# 默认使用 ROS domain 21；可由 service Environment 覆盖
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-21}"
+# 默认使用 ROS domain 17；可由 service Environment 覆盖
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-17}"
 
 # ---------- 路径（相对本脚本，避免项目目录改名后写死路径失效）----------
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,7 +31,7 @@ readonly START_SCRIPT="${SCRIPT_DIR}/start_robot_stack.sh"
 
 # 机载常用 DDS 配置根（与 qi_deploy 交付包一致）
 readonly QI_DEPLOY_DDS_DIR="${QI_DEPLOY_DDS_DIR:-/home/coral/qi_deploy_igh_release/config/dds}"
-readonly QI_SDK_DDS_DIR="${QI_SDK_DDS_DIR:-/home/coral/ql_sdk_igh_release/config/dds}"
+readonly QI_SDK_DDS_DIR="${QI_SDK_DDS_DIR:-/home/coral/project/qi_sdk_internal_igh/deploy/ql_sdk_igh_release/config/dds}"
 
 # 该目录由 service 中的 RuntimeDirectory=robot_stack_monitor 创建。
 readonly RUNTIME_DIR="/run/robot_stack_monitor"
@@ -88,7 +88,25 @@ PY
     printf '%s\n' "$iface"
 }
 
-# 解析可用的 CycloneDDS XML（对齐 qi_deploy：优先交付包按网口命名的 xml）
+# 仅接受 Domain 与 ROS_DOMAIN_ID 一致或为 any 的 XML。
+cyclonedds_domain_matches() {
+    python3 - "$1" "$ROS_DOMAIN_ID" <<'PYXML'
+import sys
+import xml.etree.ElementTree as ET
+
+try:
+    root = ET.parse(sys.argv[1]).getroot()
+    domains = [element for element in root.iter() if element.tag.rsplit("}", 1)[-1] == "Domain"]
+    ids = [next((value for key, value in element.attrib.items() if key.lower() == "id"), "any")
+           for element in domains]
+    if not ids or not any(value.lower() == "any" or value == sys.argv[2] for value in ids):
+        sys.exit(1)
+except (OSError, ET.ParseError):
+    sys.exit(1)
+PYXML
+}
+
+# 优先使用显式配置，其次使用 SDK 的 DDS XML。
 resolve_cyclonedds_uri() {
     local configured="${CYCLONEDDS_URI:-}"
     local configured_path=""
@@ -97,7 +115,7 @@ resolve_cyclonedds_uri() {
 
     if [[ -n "$configured" ]]; then
         configured_path="$(cyclonedds_uri_to_path "$configured")"
-        if [[ -r "$configured_path" ]]; then
+        if [[ -r "$configured_path" ]] && cyclonedds_domain_matches "$configured_path"; then
             if [[ "$configured" == file://* ]]; then
                 printf '%s\n' "$configured"
             else
@@ -105,21 +123,21 @@ resolve_cyclonedds_uri() {
             fi
             return 0
         fi
-        log "!!! WARNING: 配置的 CYCLONEDDS_URI 不可用: $configured" >&2
+        log "!!! WARNING: 配置的 CYCLONEDDS_URI 不可用或 Domain 与 $ROS_DOMAIN_ID 不一致: $configured" >&2
     fi
 
     iface="$(resolve_dds_network_interface)"
     for candidate in \
+        "${QI_SDK_DDS_DIR}/ql_cyclonedds_uri.xml" \
+        "${QI_SDK_DDS_DIR}/qi_cyclonedds_uri.xml" \
         "${QI_DEPLOY_DDS_DIR}/cyclonedds_${iface}.xml" \
         "${QI_DEPLOY_DDS_DIR}/cyclonedds_enp8s0.xml" \
         "${QI_DEPLOY_DDS_DIR}/.cyclonedds_runtime.xml" \
-        "${QI_SDK_DDS_DIR}/ql_cyclonedds_uri.xml" \
-        "${QI_SDK_DDS_DIR}/qi_cyclonedds_uri.xml" \
         "/home/coral/dds/cyclonedds.xml" \
         "/home/coral/project/qi_sdk_internal/install/config/dds/qi_cyclonedds_uri.xml" \
         "${PROJECT_DIR}/src/qiling_s4/qi_ros2/cyclonedds_ws/src/cyclonedds.xml"
     do
-        if [[ -r "$candidate" ]]; then
+        if [[ -r "$candidate" ]] && cyclonedds_domain_matches "$candidate"; then
             printf 'file://%s\n' "$candidate"
             return 0
         fi
@@ -406,7 +424,7 @@ load_ros_environment() {
     fi
 
     if ! CYCLONEDDS_URI="$(resolve_cyclonedds_uri)"; then
-        log "!!! FATAL: 找不到可用的 CycloneDDS 配置文件"
+        log "!!! FATAL: 找不到 Domain 与 ROS_DOMAIN_ID 一致的可用 CycloneDDS 配置文件"
         log "!!! 已检查: ${QI_DEPLOY_DDS_DIR}/cyclonedds_*.xml"
         log "!!! 以及: ${QI_SDK_DDS_DIR}/ql_cyclonedds_uri.xml"
         log "!!! 也可在 service 中设置 CYCLONEDDS_URI=file:///绝对路径/xxx.xml"
